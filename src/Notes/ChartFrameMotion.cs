@@ -1,3 +1,4 @@
+using SinmaiAlpha.Notes.Libs;
 using System;
 using System.Collections.Generic;
 using SinmaiAlpha.ChartVisuals;
@@ -173,11 +174,28 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
             }
             ClearTargets();
         }
+
+
+        public bool CanMove
+        {
+            get
+            {
+                if ((Move != null || Rotate != null || Zoom != null) && Owner != null && Main != null && Bounds != null && Controller != null && Main.gameObject.activeInHierarchy)
+                {
+                    if (GuiSizes.SinglePlayer)
+                    {
+                        return Owner.MonitorIndex == 0;
+                    }
+                    return true;
+                }
+                return false;
+            }
+        }
     }
 
     private readonly Dictionary<GameMonitor, Frame> frames = new();
     private readonly List<GameMonitor> stale = new();
-    private readonly List<Renderer> visibleRenderers = new();
+
     private readonly List<Graphic> visibleGraphics = new();
     // Pool objects which are inactive or renderer-disabled cannot contribute
     // pixels. They must retain their native poses, not be transformed/restored.
@@ -194,23 +212,54 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
         visibleGraphics.Clear();
         if (canvas != null) canvas.GetComponentsInChildren(false, visibleGraphics);
     }
-    internal void Bind(GameMonitor owner, NotesReader reader, GameCtrl controller, RectTransform main,
-        RectTransform bounds, PresentationCommands.Track move, PresentationCommands.Track rotate,
-        PresentationCommands.Track zoom, List<Transform> covers)
+    internal void Bind(GameMonitor owner, NotesReader reader, GameCtrl controller, RectTransform main, RectTransform bounds, PresentationCommands.Track move, PresentationCommands.Track rotate, PresentationCommands.Track zoom, List<Transform> covers)
     {
-        if (owner == null) return;
-        if (!frames.TryGetValue(owner, out var frame)) frames[owner] = frame = new Frame { Owner = owner };
-        if (frame.Reader != reader || frame.Controller != controller || frame.Main != main || frame.Bounds != bounds)
-        { RestoreIsolation(true); frame.RestoreCanvas(); frame.RestoreWorld(); isolationSurfacesDirty = true; }
-        frame.Reader = reader; frame.Controller = controller; frame.Main = main; frame.Bounds = bounds;
-        frame.Move = move; frame.Rotate = rotate; frame.Zoom = zoom;
-        frame.Covers.Clear(); if (covers != null) frame.Covers.AddRange(covers);
-        // View binding runs before the first motion event. Reserve isolation
-        // metadata now instead of scanning the entire scene at that event.
+        if (owner == null)
+        {
+            return;
+        }
+        if (!frames.TryGetValue(owner, out var value))
+        {
+            // The active-frame paths (poses, leases, crop, composite) used to be compiled on the first MOVE/ROTATE/ZOOM
+            // frame of the session, mid-song (about 5 ms of JIT on the game's Mono). Compile them here, at chart load
+            // (see JitWarmup). The type initialisers this can run early (this class's PropertyToID pair and collections,
+            // the Sort lambda cache; NativeRefs already ran in WarmFieldRefs) are pure and would give the same result at
+            // their first use.
+            JitWarmup.Compile(typeof(ChartFrameMotion), typeof(FrameViewportCrop), typeof(PresentationRect));
+            Dictionary<GameMonitor, Frame> dictionary = frames;
+            Frame frame = new Frame
+            {
+                Owner = owner
+            };
+            value = frame;
+            dictionary[owner] = frame;
+        }
+        if (value.Reader != reader || value.Controller != controller || value.Main != main || value.Bounds != bounds)
+        {
+            RestoreIsolation(releaseTextures: true);
+            value.RestoreCanvas();
+            value.RestoreWorld();
+            isolationSurfacesDirty = true;
+        }
+        value.Reader = reader;
+        value.Controller = controller;
+        value.Main = main;
+        value.Bounds = bounds;
+        value.Move = move;
+        value.Rotate = rotate;
+        value.Zoom = zoom;
+        value.Covers.Clear();
+        if (covers != null)
+        {
+            value.Covers.AddRange(covers);
+        }
         if (isolationSurfacesDirty || isolationLayers.Count == 0)
         {
             DiscoverSurfaces();
-            if (isolationSurfaces.Count != 0) ReserveLayers(isolationSurfaces.Count);
+            if (isolationSurfaces.Count != 0)
+            {
+                ReserveLayers(isolationSurfaces.Count);
+            }
         }
     }
     internal void BeforeNativeUpdate(GameMonitor owner)
@@ -255,6 +304,7 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
     }
     private void OnPreCull()
     {
+        ForgetWalks();
         RestoreIsolation(true);
         foreach (var frame in frames.Values) frame.RestoreWorld();
         try
@@ -265,8 +315,7 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
                 var cover = Traverse.Create(frame.Controller).Field("_movieMaskSprite").GetValue<SpriteRenderer>();
                 var movie = Traverse.Create(frame.Controller).Field("_movieSprite").GetValue<SpriteRenderer>();
                 var movieRoot = movie != null && movie.transform.parent != null && movie.transform.parent.name == "ChartMediaFrame" ? movie.transform.parent : null;
-                CollectVisibleRenderers(frame.Controller.gameObject, visibleRenderers);
-                foreach (var renderer in visibleRenderers)
+                foreach (var renderer in WalkController(frame.Controller.gameObject))
                     if (renderer != null) frame.Add(renderer.transform, cover != null && renderer.transform == cover.transform,
                         (renderer == movie || movieRoot != null && renderer.transform.IsChildOf(movieRoot)) && renderer != cover);
                 foreach (var target in frame.Covers) if (target != null && target.GetComponent<Graphic>() == null) frame.Add(target, true);
@@ -282,7 +331,271 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
                 foreach (var frame in frames.Values) { frame.RestoreWorld(); frame.RestoreCanvas(); }
         }
         catch { RestoreIsolation(true); foreach (var frame in frames.Values) { frame.RestoreWorld(); frame.RestoreCanvas(); frame.ClearTargets(); } throw; }
+        finally { ForgetWalks(); }
     }
     private void OnPostRender()
     { RestoreIsolation(false); foreach (var frame in frames.Values) frame.RestoreWorld(); }
+
+
+    internal static class NativeRefs
+    {
+        internal static readonly AccessTools.FieldRef<CommonMonitor, MonitorBackgroundTownController> BackgroundController = TryFieldRef<CommonMonitor, MonitorBackgroundTownController>("_backgroundController");
+
+        internal static readonly AccessTools.FieldRef<MonitorBackgroundTownController, GameObject> BgObject = TryFieldRef<MonitorBackgroundTownController, GameObject>("_bgObject");
+
+        internal static readonly AccessTools.FieldRef<GameCtrl, SpriteRenderer> MovieMaskSprite = TryFieldRef<GameCtrl, SpriteRenderer>("_movieMaskSprite");
+
+        private static AccessTools.FieldRef<T, F> TryFieldRef<T, F>(string name) where T : class
+        {
+            try
+            {
+                return AccessTools.FieldRefAccess<T, F>(name);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+    }
+
+    private static readonly CommonMonitor[] BackgroundOwners = new CommonMonitor[2];
+
+    private readonly List<Renderer> screenClipRenderers = new List<Renderer>();
+
+    private readonly List<int> pooledIsolationTextures = new List<int>();
+
+    private readonly List<RenderTexture> pooledIsolationScratch = new List<RenderTexture>();
+
+    private bool isolationPrimed;
+
+    private readonly List<GameObject> walkedRoots = new List<GameObject>();
+
+    private readonly List<List<Renderer>> walkedRenderers = new List<List<Renderer>>();
+
+    internal bool KeepsIsolationTexturesPooled
+    {
+        get
+        {
+            if (isolatedFrames.Count == 0)
+            {
+                return pooledIsolationTextures.Count != 0;
+            }
+            return false;
+        }
+    }
+
+    internal static GameObject NativeBackgroundObject(MonitorBackgroundTownController controller)
+    {
+        if ((object)controller == null)
+        {
+            return null;
+        }
+        AccessTools.FieldRef<MonitorBackgroundTownController, GameObject> bgObject = NativeRefs.BgObject;
+        return (bgObject != null) ? bgObject(controller) : Traverse.Create(controller).Field("_bgObject").GetValue<GameObject>();
+    }
+
+    private void CollectScreenClipRenderers(GameObject background)
+    {
+        screenClipRenderers.Clear();
+        if (background == null)
+        {
+            return;
+        }
+        Renderer[] componentsInChildren = background.GetComponentsInChildren<Renderer>(includeInactive: true);
+        foreach (Renderer renderer in componentsInChildren)
+        {
+            if (!(renderer == null) && !(renderer.GetComponent("ScreenClipSetter") == null))
+            {
+                screenClipRenderers.Add(renderer);
+            }
+        }
+    }
+
+    private void LeaseScreenClips(PresentationRect viewport)
+    {
+        foreach (Renderer renderer in screenClipRenderers)
+        {
+            bool flag = false;
+            foreach (ScreenClipLease screenClipLease2 in screenClipLeases)
+            {
+                if (screenClipLease2.Owner == renderer)
+                {
+                    flag = true;
+                    break;
+                }
+            }
+            if (!flag)
+            {
+                renderer.GetPropertyBlock(screenClipProperties);
+                float num = screenClipProperties.GetFloat(ClipMinX);
+                float num2 = screenClipProperties.GetFloat(ClipMaxX);
+                if (!float.IsNaN(num) && !float.IsNaN(num2) && !float.IsInfinity(num) && !float.IsInfinity(num2) && !(num2 <= num))
+                {
+                    ScreenClipLease screenClipLease = new ScreenClipLease
+                    {
+                        Owner = renderer,
+                        Min = num,
+                        Max = num2,
+                        AppliedMin = (num - viewport.X) / viewport.Width,
+                        AppliedMax = (num2 - viewport.X) / viewport.Width
+                    };
+                    screenClipLeases.Add(screenClipLease);
+                    screenClipProperties.SetFloat(ClipMinX, screenClipLease.AppliedMin);
+                    screenClipProperties.SetFloat(ClipMaxX, screenClipLease.AppliedMax);
+                    renderer.SetPropertyBlock(screenClipProperties);
+                }
+            }
+        }
+    }
+
+    private bool TryIsolationCrop(PresentationRect bounds, int width, int height, out FrameViewportCrop crop)
+    {
+        foreach (Renderer screenClipRenderer in screenClipRenderers)
+        {
+            screenClipRenderer.GetPropertyBlock(screenClipProperties);
+            float num = screenClipProperties.GetFloat(ClipMinX);
+            float num2 = screenClipProperties.GetFloat(ClipMaxX);
+            if (!float.IsNaN(num) && !float.IsNaN(num2) && !float.IsInfinity(num) && !float.IsInfinity(num2) && !(num2 <= num) && (!ClipPixelAligned(num, width) || !ClipPixelAligned(num2, width)))
+            {
+                return FrameViewportCrop.TryCreateFull(bounds, width, height, out crop);
+            }
+        }
+        return FrameViewportCrop.TryCreate(bounds, width, height, out crop);
+    }
+
+    private List<Renderer> WalkController(GameObject root)
+    {
+        int count = walkedRoots.Count;
+        if (count == walkedRenderers.Count)
+        {
+            walkedRenderers.Add(new List<Renderer>());
+        }
+        List<Renderer> list = walkedRenderers[count];
+        CollectVisibleRenderers(root, list);
+        walkedRoots.Add(root);
+        return list;
+    }
+
+    private void ForgetWalks()
+    {
+        walkedRoots.Clear();
+        foreach (List<Renderer> walkedRenderer in walkedRenderers)
+        {
+            walkedRenderer.Clear();
+        }
+    }
+
+    private void KeepIsolationTexturesPooled()
+    {
+        if (pooledIsolationTextures.Count == 0)
+        {
+            return;
+        }
+        pooledIsolationScratch.Clear();
+        try
+        {
+            for (int i = 0; i + 2 < pooledIsolationTextures.Count; i += 3)
+            {
+                pooledIsolationScratch.Add(RenderTexture.GetTemporary(pooledIsolationTextures[i], pooledIsolationTextures[i + 1], 24, RenderTextureFormat.RGB111110Float, RenderTextureReadWrite.Default, pooledIsolationTextures[i + 2]));
+            }
+        }
+        finally
+        {
+            foreach (RenderTexture item in pooledIsolationScratch)
+            {
+                if (item != null)
+                {
+                    RenderTexture.ReleaseTemporary(item);
+                }
+            }
+            pooledIsolationScratch.Clear();
+        }
+    }
+
+    private void PrimeIsolationTextures()
+    {
+        if (GameManager.IsAdvDemo || isolationPrimed || pooledIsolationTextures.Count != 0 || isolationSurfacesDirty || renderingIsolation)
+        {
+            return;
+        }
+        try
+        {
+            // AdvDemo has no chart-release cleanup; impossible or not-yet-ready surfaces need no prime.
+            if (isolationLayers.Count < isolationSurfaces.Count)
+            {
+                return;
+            }
+            bool canMove = false;
+            foreach (Frame frame in frames.Values)
+            {
+                canMove |= frame.CanMove;
+            }
+            if (!canMove)
+            {
+                return;
+            }
+            foreach (IsolationSurface surface in isolationSurfaces)
+            {
+                if (surface.Canvas == null || surface.Canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+                {
+                    return;
+                }
+            }
+            Camera component = GetComponent<Camera>();
+            if (component == null)
+            {
+                return;
+            }
+            foreach (IsolationSurface isolationSurface in isolationSurfaces)
+            {
+                if (!frames.TryGetValue(isolationSurface.Owner, out var value) || !value.CanMove)
+                {
+                    continue;
+                }
+                PresentationRect bounds = IsolationBounds(value.Bounds, component);
+                if (!bounds.HasArea)
+                {
+                    continue;
+                }
+                int num = ((component.targetTexture != null) ? component.targetTexture.width : component.pixelWidth);
+                int num2 = ((component.targetTexture != null) ? component.targetTexture.height : component.pixelHeight);
+                if (num <= 0 || num2 <= 0)
+                {
+                    break;
+                }
+                CollectScreenClipRenderers((isolationSurface.BackgroundController != null) ? NativeBackgroundObject(isolationSurface.BackgroundController) : null);
+                if (TryIsolationCrop(bounds, num, num2, out var crop))
+                {
+                    int item = ((component.targetTexture != null) ? component.targetTexture.antiAliasing : ((!component.allowMSAA) ? 1 : Math.Max(1, QualitySettings.antiAliasing)));
+                    pooledIsolationTextures.Add(crop.Width);
+                    pooledIsolationTextures.Add(crop.Height);
+                    pooledIsolationTextures.Add(item);
+                    isolationPrimed = true;
+                }
+            }
+            // The isolation camera, created as PrepareIsolation creates it. It stays disabled and HideAndDontSave, nothing
+            // enumerates cameras (game, MaiMagic, Alpha), and every active frame reconfigures it (CopyFrom and the rest)
+            // before its Render; only its creation moves out of the onset frame. Created inside a render (OnPreCull), it
+            // never joins the camera list, here as at the onset: UnityPlayer 2018.4 defers camera adds and removes made
+            // while rendering (RenderManager::AddRemoveCamerasDelayed), so the add and the disable cancel out.
+            if (pooledIsolationTextures.Count != 0 && isolationCamera == null)
+            {
+                GameObject gameObject = new GameObject("ChartFrameIsolationCamera")
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                isolationCamera = gameObject.AddComponent<Camera>();
+                isolationCamera.enabled = false;
+            }
+        }
+        catch (Exception)
+        {
+            pooledIsolationTextures.Clear();
+            isolationPrimed = true;
+        }
+        finally
+        {
+            screenClipRenderers.Clear();
+        }
+    }
 }

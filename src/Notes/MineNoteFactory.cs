@@ -68,45 +68,58 @@ public static class MineNoteFactory
     /// <typeparam name="TNew">目标 Mine* 组件类型（须继承 TOld）。</typeparam>
     /// <typeparam name="TOld">原版组件类型（如 TapNote）。</typeparam>
     /// <param name="postCreate">字段恢复后执行（通常用于补执行基类 Awake，缓存 SpriteRender 等）。</param>
-    public static TNew CreateFrom<TNew, TOld>(TOld prefab, Transform parent, Action<TNew> postCreate = null)
-        where TNew : Component, TOld
-        where TOld : Component
+    public static TNew CreateFrom<TNew, TOld>(TOld prefab, Transform parent, Action<TNew> postCreate = null) where TNew : Component, TOld where TOld : Component
     {
-        var go = UnityEngine.Object.Instantiate(prefab.gameObject, parent);
-        var old = go.GetComponent<TOld>();
-        var snapshot = SnapshotFields(old);
-        UnityEngine.Object.DestroyImmediate(old);
-        var mine = go.AddComponent<TNew>();
-        RestoreFields(mine, snapshot);
-        postCreate?.Invoke(mine);
-        return mine;
+        GameObject gameObject = UnityEngine.Object.Instantiate(prefab.gameObject, parent);
+        TOld component = gameObject.GetComponent<TOld>();
+        FieldInfo[] copyFields = GetCopyFields(component.GetType());
+        object[] array = new object[copyFields.Length];
+        for (int i = 0; i < copyFields.Length; i++)
+        {
+            array[i] = copyFields[i].GetValue(component);
+        }
+        UnityEngine.Object.DestroyImmediate(component);
+        TNew val = gameObject.AddComponent<TNew>();
+        for (int j = 0; j < copyFields.Length; j++)
+        {
+            copyFields[j].SetValue(val, array[j]);
+        }
+        postCreate?.Invoke(val);
+        return val;
     }
 
     // 收集游戏逻辑层的实例字段值。
     // 跳过 UnityEngine.* 声明的字段：那些是 native 绑定（m_CachedPtr / m_GameObject 等），
     // 复制会导致托管对象指向错误的 native 对象。
-    private static List<KeyValuePair<FieldInfo, object>> SnapshotFields(object source)
-    {
-        var list = new List<KeyValuePair<FieldInfo, object>>();
-        for (var type = source.GetType(); type != null && type != typeof(object); type = type.BaseType)
-        {
-            if (type.Namespace != null && type.Namespace.StartsWith("UnityEngine")) continue;
 
-            foreach (var field in type.GetFields(
-                         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+
+
+
+
+    private static readonly Dictionary<Type, FieldInfo[]> FieldCache = new Dictionary<Type, FieldInfo[]>();
+
+    private static FieldInfo[] GetCopyFields(Type sourceType)
+    {
+        if (FieldCache.TryGetValue(sourceType, out var value))
+        {
+            return value;
+        }
+        List<FieldInfo> list = new List<FieldInfo>();
+        Type type = sourceType;
+        while (type != null && type != typeof(object))
+        {
+            if (type.Namespace == null || !type.Namespace.StartsWith("UnityEngine"))
             {
-                list.Add(new KeyValuePair<FieldInfo, object>(field, field.GetValue(source)));
+                FieldInfo[] fields = type.GetFields(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                foreach (FieldInfo item in fields)
+                {
+                    list.Add(item);
+                }
             }
+            type = type.BaseType;
         }
-
-        return list;
-    }
-
-    private static void RestoreFields(object target, List<KeyValuePair<FieldInfo, object>> snapshot)
-    {
-        foreach (var pair in snapshot)
-        {
-            pair.Key.SetValue(target, pair.Value);
-        }
+        value = list.ToArray();
+        FieldCache[sourceType] = value;
+        return value;
     }
 }

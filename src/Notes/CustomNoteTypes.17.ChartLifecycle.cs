@@ -1,20 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
-using Manager;
-using MelonLoader;
-using Monitor;
-using Monitor.Game;
 using Process;
-using UnityEngine;
-using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
 
@@ -30,9 +15,6 @@ public partial class CustomNoteTypes
         NoteSpeedByIndex.Clear();
         PendingNoteSpeedMultipliers.Clear();
         PendingTouchSpeedMultipliers.Clear();
-        PendingMineFlags.Clear();
-        PendingTouchBreakFlags.Clear();
-        PendingTouchStarFlags.Clear();
         PendingSvSegments.Clear();
         PendingHsSegments.Clear();
         SvCurves.Clear();
@@ -51,6 +33,7 @@ public partial class CustomNoteTypes
         TouchStarPools.Clear();
         MineTouchStarPools.Clear();
         PoolRoutes.Clear();
+        DeferredMirrorPoolsByCtrl.Clear();
         HandledInitializations.Clear();
         RestoreAllMineGuideSprites();
         MineBreakSlides.Clear();
@@ -78,9 +61,6 @@ public partial class CustomNoteTypes
         NoteSpeedByIndex.Clear();
         PendingNoteSpeedMultipliers.Clear();
         PendingTouchSpeedMultipliers.Clear();
-        PendingMineFlags.Clear();
-        PendingTouchBreakFlags.Clear();
-        PendingTouchStarFlags.Clear();
         PendingSvSegments.Clear();
         PendingHsSegments.Clear();
         SvCurves.Clear();
@@ -99,6 +79,7 @@ public partial class CustomNoteTypes
         TouchStarPools.Clear();
         MineTouchStarPools.Clear();
         PoolRoutes.Clear();
+        DeferredMirrorPoolsByCtrl.Clear();
         HandledInitializations.Clear();
         RestoreAllMineGuideSprites();
         MineBreakSlides.Clear();

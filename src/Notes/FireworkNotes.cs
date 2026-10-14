@@ -19,7 +19,7 @@ public partial class CustomNoteTypes
     private sealed class FireworkLease { public FireworkValue Value; public bool Emitted; public int Monitor; }
     private sealed class FireworkDisplay { public TapCEffect Effect; public NotesReader Reader; }
     public sealed class FireworkEndState { internal bool Eligible; internal Vector3 Position; internal GameCtrl Controller; }
-    private static readonly ConditionalWeakTable<NoteData, FireworkValue> FireworkNotes = new();
+    private static ConditionalWeakTable<NoteData, FireworkValue> FireworkNotes = new ConditionalWeakTable<NoteData, FireworkValue>();
     private static readonly Dictionary<NoteBase, FireworkLease> FireworkOwners = new();
     private static readonly Dictionary<int, FireworkDisplay> FireworkDisplays = new();
     private static readonly Dictionary<Type, bool> FireworkNativeTriggers = new();

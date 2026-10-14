@@ -1,20 +1,13 @@
+using System.Globalization;
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
 using Manager;
 using MelonLoader;
 using Monitor;
-using Monitor.Game;
-using Process;
 using UnityEngine;
-using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
 
@@ -24,40 +17,30 @@ public partial class CustomNoteTypes
 
     private static Sprite CreateSpriteFromTexture(string textureKey, Texture2D texture, Sprite original)
     {
-        // ppu 必须沿用原 sprite：固定 1f 会让细长贴图（如 hold 条）尺寸/拉伸全错。
-        var ppu = original != null ? original.pixelsPerUnit : 1f;
-        // 缓存 key 必须包含完整几何信息：图集 sprite 的 name 可能是空的，
-        // 只按 name 缓存会让不同子物体（不同 rect/border）串用同一个 Sprite。
-        var cacheKey = textureKey + "|" +
-            (original != null
-                ? original.name + "|" + original.rect + "|" + original.pivot + "|" + original.border + "|" + ppu
-                : "null");
-        if (SpriteCache.TryGetValue(cacheKey, out var cached))
+        if ((object)original != null && original != null && SpriteFrontCache.TryGetValue(new SpriteFrontKey(textureKey, original), out var value2) && value2.Culture == CultureInfo.CurrentCulture)
         {
-            RememberSpriteModel(cached, original);
-            return cached;
+            RememberSpriteModel(value2.Sprite, original);
+            return value2.Sprite;
         }
-
-        var pivot = original != null
-            ? new Vector2(original.pivot.x / original.rect.width, original.pivot.y / original.rect.height)
-            : new Vector2(0.5f, 0.5f);
-        // 9-slice border 必须按新贴图尺寸等比换算：原版 hold 条是 Sliced 渲染（中间段拉伸），
-        // border 是相对原 sprite 的像素值，直接套用会切错位置导致整条被拉伸。
-        var border = Vector4.zero;
-        if (original != null && original.border != Vector4.zero)
+        float pixelsPerUnit = ((original != null) ? original.pixelsPerUnit : 1f);
+        string key = textureKey + "|" + ((original != null) ? (original.name + "|" + original.rect.ToString() + "|" + original.pivot.ToString() + "|" + original.border.ToString() + "|" + pixelsPerUnit) : "null");
+        if (SpriteCache.TryGetValue(key, out var value))
         {
-            var scaleX = texture.width / original.rect.width;
-            var scaleY = texture.height / original.rect.height;
-            border = new Vector4(
-                original.border.x * scaleX,
-                original.border.y * scaleY,
-                original.border.z * scaleX,
-                original.border.w * scaleY);
+            RememberFrontSprite(textureKey, original, value);
+            RememberSpriteModel(value, original);
+            return value;
         }
-
-        // FullRect 不做 alpha 裁剪，避免 Tight 把细长贴图裁出奇怪的形状。
-        var sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), pivot, ppu, 0, SpriteMeshType.FullRect, border);
-        SpriteCache[cacheKey] = sprite;
+        UnityEngine.Vector2 pivot = ((original != null) ? new UnityEngine.Vector2(original.pivot.x / original.rect.width, original.pivot.y / original.rect.height) : new UnityEngine.Vector2(0.5f, 0.5f));
+        UnityEngine.Vector4 border = UnityEngine.Vector4.zero;
+        if (original != null && original.border != UnityEngine.Vector4.zero)
+        {
+            float num = (float)texture.width / original.rect.width;
+            float num2 = (float)texture.height / original.rect.height;
+            border = new UnityEngine.Vector4(original.border.x * num, original.border.y * num2, original.border.z * num, original.border.w * num2);
+        }
+        Sprite sprite = Sprite.Create(texture, new Rect(0f, 0f, texture.width, texture.height), pivot, pixelsPerUnit, 0u, SpriteMeshType.FullRect, border);
+        SpriteCache[key] = sprite;
+        RememberFrontSprite(textureKey, original, sprite);
         RememberSpriteModel(sprite, original);
         return sprite;
     }
@@ -390,6 +373,122 @@ public partial class CustomNoteTypes
             {
                 borderRenderers[i].sprite = CreateSpriteFromTexture(key, texture, borderRenderers[i].sprite);
             }
+        }
+    }
+
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(StarNote), "Initialize")]
+    public static void StarNoteInitApplySpeed(object __instance, NoteData __0)
+    {
+        if (FeaturesEnabled(__instance))
+        {
+            NoteData noteData = FindNoteDataFromArgs(__instance, __0);
+            if (noteData != null)
+            {
+                TryApplySpeedToNoteObject(__instance, noteData);
+            }
+        }
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(BreakStarNote), "Initialize")]
+    public static void BreakStarNoteInitApplySpeed(object __instance, NoteData __0)
+    {
+        if (FeaturesEnabled(__instance))
+        {
+            NoteData noteData = FindNoteDataFromArgs(__instance, __0);
+            if (noteData != null)
+            {
+                TryApplySpeedToNoteObject(__instance, noteData);
+            }
+        }
+    }
+
+    private static NoteData FindNoteDataFromArgs(object __instance, NoteData note)
+    {
+        if (note != null)
+        {
+            return note;
+        }
+        if (__instance != null)
+        {
+            Traverse traverse = Traverse.Create(__instance);
+            string[] array = new string[5] { "noteData", "_noteData", "NoteData", "data", "_data" };
+            foreach (string name in array)
+            {
+                Traverse traverse2 = traverse.Field(name);
+                if (traverse2.FieldExists())
+                {
+                    NoteData value = traverse2.GetValue<NoteData>();
+                    if (value != null)
+                    {
+                        return value;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private struct SpriteFrontKey : IEquatable<SpriteFrontKey>
+    {
+        public readonly string TextureKey;
+
+        public readonly Sprite Original;
+
+        public SpriteFrontKey(string textureKey, Sprite original)
+        {
+            TextureKey = textureKey;
+            Original = original;
+        }
+
+        public bool Equals(SpriteFrontKey other)
+        {
+            if ((object)Original == other.Original)
+            {
+                return string.Equals(TextureKey, other.TextureKey);
+            }
+            return false;
+        }
+
+        public override bool Equals(object obj)
+        {
+            if (obj is SpriteFrontKey other)
+            {
+                return Equals(other);
+            }
+            return false;
+        }
+
+        public override int GetHashCode()
+        {
+            return (((TextureKey != null) ? TextureKey.GetHashCode() : 0) * 397) ^ RuntimeHelpers.GetHashCode(Original);
+        }
+    }
+
+    private sealed class SpriteFrontEntry
+    {
+        public Sprite Sprite;
+
+        public CultureInfo Culture;
+    }
+
+    private static readonly Dictionary<SpriteFrontKey, SpriteFrontEntry> SpriteFrontCache = new Dictionary<SpriteFrontKey, SpriteFrontEntry>();
+
+    private static void RememberFrontSprite(string textureKey, Sprite original, Sprite sprite)
+    {
+        if (!(original == null))
+        {
+            if (SpriteFrontCache.Count >= 4096)
+            {
+                SpriteFrontCache.Clear();
+            }
+            SpriteFrontCache[new SpriteFrontKey(textureKey, original)] = new SpriteFrontEntry
+            {
+                Sprite = sprite,
+                Culture = CultureInfo.CurrentCulture
+            };
         }
     }
 }

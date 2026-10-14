@@ -3,6 +3,9 @@
 与AquaMai的兼容性仍需要测试，可能有奇怪的Bug
 请关闭AquaMai过新过热中的CustomNoteTypes、ExtraDifficulty、ReviveFinaleVSlide、TapInHoldFix。
 ```
+
+MaiMagic 兼容层及性能补丁已同步，保留 AquaMai 支持；合并范围、回归测试与待实机验证项目见 [同步审查记录](docs/MaiMagic-sync.md)。
+
 ## 为Sinmai添加了地雷键、TouchStar、Hold/TouchHold头的Slide、相邻键直线的Slide比如1-2-3-4[4:1]、SSS/D 区滑条、SlideCode、SV/HS、弹跳出现note/修改note出生位置/note透明度、独立音符流、假键、噪域、字幕及多种屏幕特效
 
 ### 安装

@@ -38,21 +38,52 @@ public partial class CustomNoteTypes
 
     private static bool LoadTouchProgressShader()
     {
-        if (TouchProgressShader != null) return true;
+        if (TouchProgressShader != null)
+        {
+            return true;
+        }
+        if (TouchProgressLoadFailed)
+        {
+            return false;
+        }
         try
         {
-            var path = FileSystem.ResolvePath("Sinmai-Alpha/Alpha/NoteVisuals.ab");
-            if (!File.Exists(path)) return false;
+            string path = FileSystem.ResolvePath("Sinmai-Alpha/Alpha/NoteVisuals.ab");
+            if (!File.Exists(path))
+            {
+                TouchProgressLoadFailed = true;
+                return false;
+            }
             TouchProgressBundle = AssetBundle.LoadFromFile(path);
+            NoteTintShaderUnavailable = false;
             if (TouchProgressBundle != null)
+            {
                 TouchProgressShader = TouchProgressBundle.LoadAsset<Shader>("assets/aquamai/touchholdprogress.shader");
-            if (TouchProgressShader != null && TouchProgressShader.isSupported) return true;
+            }
+            if (TouchProgressShader != null && TouchProgressShader.isSupported)
+            {
+                return true;
+            }
         }
-        catch (Exception e) { if (!TouchProgressWarning) MelonLogger.Warning("[TouchHold Progress] " + e.Message); }
-        if (!TouchProgressWarning) MelonLogger.Warning("[TouchHold Progress] Material unavailable; retaining native gauge.");
+        catch (Exception ex)
+        {
+            if (!TouchProgressWarning)
+            {
+                MelonLogger.Warning("[TouchHold Progress] " + ex.Message);
+            }
+        }
+        if (!TouchProgressWarning)
+        {
+            MelonLogger.Warning("[TouchHold Progress] Material unavailable; retaining native gauge.");
+        }
         TouchProgressWarning = true;
-        if (TouchProgressBundle != null) TouchProgressBundle.Unload(true);
-        TouchProgressBundle = null; TouchProgressShader = null;
+        TouchProgressLoadFailed = true;
+        if (TouchProgressBundle != null)
+        {
+            TouchProgressBundle.Unload(unloadAllLoadedObjects: true);
+        }
+        TouchProgressBundle = null;
+        TouchProgressShader = null;
         return false;
     }
     private static void ApplyBreakTouchHoldProgress(Component component)
@@ -87,28 +118,52 @@ public partial class CustomNoteTypes
         render.sharedMaterial.shader != null && render.sharedMaterial.shader.name == TouchProgressShaderName;
     private static void ApplyTouchProgressLiveVisual(SpriteRenderer render, VisualValue live)
     {
-        var properties = new MaterialPropertyBlock(); render.GetPropertyBlock(properties);
-        var rgb = live.Color ?? 0xFF6538;
-        properties.SetColor("_NoteColor", new Color(((rgb >> 16) & 255) / 255f, ((rgb >> 8) & 255) / 255f, (rgb & 255) / 255f, 1));
-        properties.SetFloat("_NoteAlpha", live.Alpha ?? 1);
-        var changed = live.Color.HasValue || live.Alpha.HasValue;
-        // The reference switches to its ordinary live tint material during a
-        // live color/alpha override, then restores the authored break material.
-        properties.SetFloat("_Brightness", changed ? 1 : 1.12f);
-        properties.SetFloat("_SrcHue", changed ? -1 : 0);
-        render.SetPropertyBlock(properties);
+        MaterialPropertyBlock materialPropertyBlock = TouchProgressLiveBlock ?? (TouchProgressLiveBlock = new MaterialPropertyBlock());
+        render.GetPropertyBlock(materialPropertyBlock);
+        int num = live.Color ?? 16737592;
+        materialPropertyBlock.SetColor("_NoteColor", new Color((float)((num >> 16) & 0xFF) / 255f, (float)((num >> 8) & 0xFF) / 255f, (float)(num & 0xFF) / 255f, 1f));
+        materialPropertyBlock.SetFloat("_NoteAlpha", live.Alpha ?? 1f);
+        bool flag = live.Color.HasValue || live.Alpha.HasValue;
+        materialPropertyBlock.SetFloat("_Brightness", flag ? 1f : 1.12f);
+        materialPropertyBlock.SetFloat("_SrcHue", flag ? (-1) : 0);
+        render.SetPropertyBlock(materialPropertyBlock);
     }
     private static void ResetTouchProgress(int monitor = -1, NotesReader reader = null)
     {
-        foreach (var pair in TouchProgressOwners.ToArray())
+        KeyValuePair<TouchHoldC, TouchProgressLease>[] array = TouchProgressOwners.ToArray();
+        for (int i = 0; i < array.Length; i++)
         {
-            if (pair.Key != null && (monitor >= 0 && pair.Key.MonitorId != monitor ||
-                reader != null && NotesManager.Instance(pair.Key.MonitorId).getReader() != reader)) continue;
-            RestoreVisualLease(pair.Key); pair.Value.Restore(); TouchProgressOwners.Remove(pair.Key);
+            KeyValuePair<TouchHoldC, TouchProgressLease> keyValuePair = array[i];
+            if (!(keyValuePair.Key != null) || ((monitor < 0 || keyValuePair.Key.MonitorId == monitor) && (reader == null || NotesManager.Instance(keyValuePair.Key.MonitorId).getReader() == reader)))
+            {
+                RestoreVisualLease(keyValuePair.Key);
+                keyValuePair.Value.Restore();
+                TouchProgressOwners.Remove(keyValuePair.Key);
+            }
         }
-        if (TouchProgressOwners.Count != 0 || HasNoteTintMaterials()) return;
-        if (TouchProgressBundle != null) TouchProgressBundle.Unload(true);
-        TouchProgressBundle = null; TouchProgressShader = null;
+        // A per-monitor reset is a seek (TouchProgressCollectPatch): NoteVisuals.ab and its shaders stay loaded (the
+        // same shared assets the next note would load again). Chart load and release unload as before and re-arm a
+        // failed load.
+        if (monitor >= 0)
+        {
+            return;
+        }
+        // A chart load (loadMa2Main) also drops the VisualState stream indexes, rebuilt on first use: attract mode never
+        // reaches ReleaseChartPresentation, so they would otherwise keep each demo chart's streams until the cap.
+        if (reader != null)
+        {
+            VisualState.ReleaseIndexes();
+        }
+        TouchProgressLoadFailed = false;
+        if (TouchProgressOwners.Count == 0 && !HasNoteTintMaterials())
+        {
+            if (TouchProgressBundle != null)
+            {
+                TouchProgressBundle.Unload(unloadAllLoadedObjects: true);
+            }
+            TouchProgressBundle = null;
+            TouchProgressShader = null;
+        }
     }
     [HarmonyPatch(typeof(TouchBreakHoldC), nameof(TouchBreakHoldC.Initialize))]
     public static class TouchProgressInitializePatch
@@ -143,4 +198,11 @@ public partial class CustomNoteTypes
             vertices[i] = vertices[i] * source.pixelsPerUnit + source.pivot;
         destination.OverrideGeometry(vertices, source.triangles);
     }
+
+
+    private static bool TouchProgressLoadFailed;
+
+    private static bool NoteTintShaderUnavailable;
+
+    private static MaterialPropertyBlock TouchProgressLiveBlock;
 }

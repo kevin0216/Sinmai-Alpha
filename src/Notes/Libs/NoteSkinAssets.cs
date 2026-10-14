@@ -53,23 +53,60 @@ public sealed class NoteSkinAssets
     }
     public Sprite Create(string path, Sprite model)
     {
-        if (!NoteSkin.Normalize(path, out var safe)) return null;
-        var key = (safe, model == null ? 0 : model.GetInstanceID());
-        if (sprites.TryGetValue(key, out var cached)) return cached;
-        var texture = Load(safe);
-        if (texture == null) { sprites[key] = null; return null; }
-        var width = model != null && model.rect.width > 0 ? model.rect.width / model.pixelsPerUnit : 0;
-        var ppu = width > .0001f ? texture.width / width : 100f;
-        var sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(.5f, .5f), ppu);
-        sprite.name = safe;
+        if (path == null)
+        {
+            return null;
+        }
+        if (!normalized.TryGetValue(path, out var path2))
+        {
+            path2 = (NoteSkin.Normalize(path, out var path3) ? path3 : null);
+            normalized[path] = path2;
+        }
+        if (path2 == null)
+        {
+            return null;
+        }
+        (string, int) key = (path2, (!(model == null)) ? model.GetInstanceID() : 0);
+        if (sprites.TryGetValue(key, out var value))
+        {
+            return value;
+        }
+        Texture2D texture2D = Load(path2);
+        if (texture2D == null)
+        {
+            sprites[key] = null;
+            return null;
+        }
+        float num = ((model != null && model.rect.width > 0f) ? (model.rect.width / model.pixelsPerUnit) : 0f);
+        float pixelsPerUnit = ((num > 0.0001f) ? ((float)texture2D.width / num) : 100f);
+        Sprite sprite = Sprite.Create(texture2D, new Rect(0f, 0f, texture2D.width, texture2D.height), new Vector2(0.5f, 0.5f), pixelsPerUnit);
+        sprite.name = path2;
         sprites[key] = sprite;
         return sprite;
     }
     public void Clear()
     {
-        foreach (var sprite in sprites.Values) if (sprite != null) Object.Destroy(sprite);
+        foreach (Sprite value in sprites.Values)
+        {
+            if (value != null)
+            {
+                UnityEngine.Object.Destroy(value);
+            }
+        }
         sprites.Clear();
-        foreach (var texture in textures.Values) if (texture != null) Object.Destroy(texture);
-        textures.Clear(); preload.Clear(); queued = false;
+        foreach (Texture2D value2 in textures.Values)
+        {
+            if (value2 != null)
+            {
+                UnityEngine.Object.Destroy(value2);
+            }
+        }
+        textures.Clear();
+        normalized.Clear();
+        preload.Clear();
+        queued = false;
     }
+
+
+    private readonly Dictionary<string, string> normalized = new Dictionary<string, string>(StringComparer.Ordinal);
 }

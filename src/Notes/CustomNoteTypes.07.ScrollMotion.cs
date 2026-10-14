@@ -1,20 +1,13 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
 using Manager;
 using MelonLoader;
 using Monitor;
 using Monitor.Game;
-using Process;
-using UnityEngine;
-using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
 
@@ -69,22 +62,28 @@ public partial class CustomNoteTypes
     // Native pools impose a 10-second lead ceiling; judgment timing is unchanged.
     private static float SvScaleActivationLead(float lead, float leadDiv, NoteData note)
     {
-        lead = BounceHoldActivationLead(lead, note);
-        if (SpeedMultByNoteIndex.Count == 0 || note == null) return lead;
-        if (note.type.isAllSlide())
+        if (note == null)
         {
-            var hs = ResolvePlayableHs(note);
-            if (Math.Abs(hs - 1) < .00001f) return lead;
-            // Reserve enough time for the earliest slide appearance option.
-            // HS uses absolute speed for fade lead; zero speed appears at the head.
-            var offset = ScrollVisualTiming.SlideAppearanceOffset(RingViewSpeed(lead / leadDiv) * hs, -1);
-            return Math.Min(10000f, Math.Max(lead, -offset));
+            return SvScaleActivationLeadCore(lead, leadDiv, note);
         }
-        if (!HsMultByNoteIndex.TryGetValue(note.indexNote, out var multiplier) ||
-            !SvScrollPosByNoteIndex.TryGetValue(note.indexNote, out var target)) return lead;
-        if (note.type.isTouch()) return TouchVisualActivationLead(note.indexNote, note.time.msec, lead / leadDiv, lead);
-        var visible = GetRingFirstVisibleTimeCached(note, lead / leadDiv);
-        return float.IsNaN(visible) ? lead : Math.Min(10000f, Math.Max(lead, note.time.msec - visible));
+        ChartRuntimeState current = RuntimeCharts.Current;
+        if (current.SpeedMultByNoteIndex.Count == 0 && current.BounceDurationByNoteIndex.Count == 0)
+        {
+            return lead;
+        }
+        Dictionary<NoteData, ActivationLeadMemoEntry> activationLeadMemo = current.ActivationLeadMemo;
+        if (activationLeadMemo.TryGetValue(note, out var value) && SameFloat(value.Lead, lead) && SameFloat(value.Div, leadDiv))
+        {
+            return value.Result;
+        }
+        float num = SvScaleActivationLeadCore(lead, leadDiv, note);
+        activationLeadMemo[note] = new ActivationLeadMemoEntry
+        {
+            Lead = lead,
+            Div = leadDiv,
+            Result = num
+        };
+        return num;
     }
 
     /// <summary>把 UpdateCtrl 里 apperMsecTap/apperMsecTouch 的读取替换为
@@ -252,5 +251,52 @@ public partial class CustomNoteTypes
                 MelonLogger.Warning("[CustomNoteType] HoldBodyScrollTranspiler: num4 pattern not found in Execute; hold body stays time-driven (SV jitter on hold bars disabled)");
             return list;
         }
+    }
+
+
+    private static bool SameFloat(float a, float b)
+    {
+        if (a == b)
+        {
+            if (a == 0f)
+            {
+                return 1f / a == 1f / b;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static float SvScaleActivationLeadCore(float lead, float leadDiv, NoteData note)
+    {
+        lead = BounceHoldActivationLead(lead, note);
+        if (SpeedMultByNoteIndex.Count == 0 || note == null)
+        {
+            return lead;
+        }
+        if (note.type.isAllSlide())
+        {
+            float num = ResolvePlayableHs(note);
+            if (Math.Abs(num - 1f) < 1E-05f)
+            {
+                return lead;
+            }
+            float num2 = ScrollVisualTiming.SlideAppearanceOffset(RingViewSpeed(lead / leadDiv) * num, -1f);
+            return Math.Min(10000f, Math.Max(lead, -num2));
+        }
+        if (!HsMultByNoteIndex.TryGetValue(note.indexNote, out var _) || !SvScrollPosByNoteIndex.TryGetValue(note.indexNote, out var _))
+        {
+            return lead;
+        }
+        if (note.type.isTouch())
+        {
+            return TouchVisualActivationLead(note.indexNote, note.time.msec, lead / leadDiv, lead);
+        }
+        float ringFirstVisibleTimeCached = GetRingFirstVisibleTimeCached(note, lead / leadDiv);
+        if (!float.IsNaN(ringFirstVisibleTimeCached))
+        {
+            return Math.Min(10000f, Math.Max(lead, note.time.msec - ringFirstVisibleTimeCached));
+        }
+        return lead;
     }
 }

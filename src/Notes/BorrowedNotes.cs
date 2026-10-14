@@ -1,10 +1,10 @@
+using Manager.UserDatas;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using SinmaiAlpha.ChartVisuals;
-using SinmaiAlpha.Hosting;
 using SinmaiAlpha.Notes.Libs;
 using DB;
 using HarmonyLib;
@@ -41,7 +41,7 @@ public partial class CustomNoteTypes
             if (Guide != null) { Guide.gameObject.SetActive(false); Object.Destroy(Guide.gameObject); }
         }
     }
-    private static readonly ConditionalWeakTable<NoteData, BorrowedBinding> BorrowedNotes = new();
+    private static ConditionalWeakTable<NoteData, BorrowedBinding> BorrowedNotes = new ConditionalWeakTable<NoteData, BorrowedBinding>();
     private static readonly Dictionary<Component, BorrowedLease> BorrowedOwners = new();
     public sealed class BorrowedCarrierOwner : MonoBehaviour { }
     private static string pendingBorrowed { get => RuntimeCharts.Current.pendingBorrowed; set => RuntimeCharts.Current.pendingBorrowed = value; }
@@ -257,56 +257,142 @@ public partial class CustomNoteTypes
             : mine ? GetBorrowedGraySprite(picture) : picture;
         render.color = new Color(1, 1, 1, value.Alpha ?? 1);
     }
-    [HarmonyPostfix, HarmonyPriority(Priority.Last - 20), HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
+    [HarmonyPostfix]
+    [HarmonyPriority(-20)]
+    [HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
     public static void UpdateBorrowedNotes(GameCtrl __instance)
     {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-        var now = NotesManager.GetCurrentMsec();
-        var reader = NotesManager.Instance(__instance.MonitorIndex).getReader();
-        VisualTimelines.TryGetValue(reader, out var timeline);
-        var option = Singleton<GamePlayManager>.Instance.GetGameScore(__instance.MonitorIndex).UserOption;
-        foreach (var pair in BorrowedOwners.Where(p => p.Value.Monitor == __instance.MonitorIndex).ToArray())
+        if (!FeaturesEnabled(__instance))
         {
-            var owner = pair.Key; var lease = pair.Value;
-            if (owner == null || !owner.gameObject.activeInHierarchy || owner is NoteBase nativeOwner && nativeOwner.IsEnd()) { RemoveBorrowedOwner(owner); continue; }
-            if (lease.Standalone && now > lease.Note.end.msec + 150)
-            { lease.Note.isJudged = true; RemoveBorrowedOwner(owner); continue; }
-            lease.HideNative();
-            if (lease.Body == null) continue;
-            var route = lease.Binding.Route; var note = lease.Note;
-            var visible = now >= note.time.msec && now <= note.end.msec && !GameManager.ForceHideNote(lease.Monitor);
-            lease.Body.enabled = visible; if (lease.Guide != null) lease.Guide.enabled = visible;
-            if (lease.TouchPetals != null) foreach (var petal in lease.TouchPetals) petal.enabled = visible;
-            if (!visible) continue;
-            var progress = MajdataSlideProgress(note, note.time.msec, route.Seconds * 1000, now);
-            var point = MirrorBorrowed(lease.Path.Evaluate(progress), option.MirrorMode);
-            var tangent = MirrorBorrowed(lease.Path.Tangent(progress), option.MirrorMode);
-            lease.Body.transform.localPosition = point * 100;
-            var rotate = route.Family == "star" || route.Family == "hold" || route.Family == "touchhold";
-            lease.Body.transform.localRotation = Quaternion.Euler(0, 0, rotate ? Mathf.Atan2(tangent.y, tangent.x) * Mathf.Rad2Deg + 18 : 0);
-            var visual = BorrowedVisual(note, route); var live = new VisualValue();
-            if (timeline != null && timeline.Streams.TryGetValue(VisualNotes.TryGetValue(note, out var payload) ? payload.Stream : "", out var changes))
-                live = VisualState.Resolve(changes, now, visual);
-            var look = new VisualValue { Color = live.Color ?? visual.Base.Color, Alpha = live.Alpha ?? visual.Base.Alpha,
-                X = live.X ?? visual.Base.X, Y = live.Y ?? visual.Base.Y };
-            var size = route.Family == "star" ? 1.5f : 1;
-            lease.Body.transform.localScale = new Vector3(size * (look.X ?? 1), size * (look.Y ?? 1), 1);
-            if ((route.Family == "touch" || route.Family == "touchhold") && visual.Break && !look.Color.HasValue) look.Color = 0xFF6538;
-            BorrowedLook(lease.Body, lease.Picture, look, visual.Mine);
-            if (lease.TouchPetals != null) foreach (var petal in lease.TouchPetals) BorrowedLook(petal, lease.TouchPetalPicture, look, visual.Mine);
-            if (lease.Guide == null) continue;
-            var radius = point.magnitude;
-            lease.Guide.enabled = radius > .001f;
-            lease.Guide.transform.localPosition = Vector3.zero;
-            lease.Guide.transform.localRotation = Quaternion.Euler(0, 0, Mathf.Atan2(point.y, point.x) * Mathf.Rad2Deg - 90);
-            lease.Guide.transform.localScale = Vector3.one * (radius / 4.8f);
-            // Reference guide is a sibling: live material/size changes affect
-            // the carrier only. Its guide keeps the authored-time material.
-            BorrowedLook(lease.Guide, lease.GuidePicture, visual.Base, visual.Mine);
+            return;
+        }
+        float currentMsec = NotesManager.GetCurrentMsec();
+        NotesReader reader = NotesManager.Instance(__instance.MonitorIndex).getReader();
+        VisualTimelines.TryGetValue(reader, out var value);
+        UserOption userOption = Singleton<GamePlayManager>.Instance.GetGameScore(__instance.MonitorIndex).UserOption;
+        int monitorIndex = __instance.MonitorIndex;
+        List<KeyValuePair<Component, BorrowedLease>> list = BorrowedScratch;
+        list.Clear();
+        foreach (KeyValuePair<Component, BorrowedLease> borrowedOwner in BorrowedOwners)
+        {
+            if (borrowedOwner.Value.Monitor == monitorIndex)
+            {
+                list.Add(borrowedOwner);
+            }
+        }
+        try
+        {
+            UpdateBorrowedOwners(list, currentMsec, value, userOption);
+        }
+        finally
+        {
+            list.Clear();
         }
     }
     [HarmonyPrefix, HarmonyPriority(Priority.First + 10), HarmonyPatch(typeof(GameCtrl), "ForceNoteCollect")]
     public static void CollectBorrowedNotes(GameCtrl __instance)
     { foreach (var pair in BorrowedOwners.Where(p => p.Value.Monitor == __instance.MonitorIndex).ToArray()) RemoveBorrowedOwner(pair.Key); }
+
+    private static readonly List<KeyValuePair<Component, FakeLease>> FakeLifetimeScratch = new List<KeyValuePair<Component, FakeLease>>();
+
+    private static readonly List<KeyValuePair<TouchNoteB, TouchRadiusLease>> TouchRadiusScratch = new List<KeyValuePair<TouchNoteB, TouchRadiusLease>>();
+
+    private static readonly List<KeyValuePair<Component, BorrowedLease>> BorrowedScratch = new List<KeyValuePair<Component, BorrowedLease>>();
+
+    private static readonly List<KeyValuePair<NoteBase, SkinLease>> SkinScratch = new List<KeyValuePair<NoteBase, SkinLease>>();
+
+    private static readonly List<KeyValuePair<NoteBase, StarHeadLease>> StarHeadScratch = new List<KeyValuePair<NoteBase, StarHeadLease>>();
+
+    private static readonly List<KeyValuePair<Component, VisualLease>> VisualScratch = new List<KeyValuePair<Component, VisualLease>>();
+
+    private static readonly VisualValue EmptyVisualValue = new VisualValue();
+
+    private static void UpdateBorrowedOwners(List<KeyValuePair<Component, BorrowedLease>> array, float currentMsec, VisualTimeline value, UserOption userOption)
+    {
+        for (int num = 0; num < array.Count; num++)
+        {
+            KeyValuePair<Component, BorrowedLease> keyValuePair = array[num];
+            Component key = keyValuePair.Key;
+            BorrowedLease value2 = keyValuePair.Value;
+            if (key == null || !key.gameObject.activeInHierarchy || (key is NoteBase noteBase && noteBase.IsEnd()))
+            {
+                RemoveBorrowedOwner(key);
+                continue;
+            }
+            if (value2.Standalone && currentMsec > value2.Note.end.msec + 150f)
+            {
+                value2.Note.isJudged = true;
+                RemoveBorrowedOwner(key);
+                continue;
+            }
+            value2.HideNative();
+            if (value2.Body == null)
+            {
+                continue;
+            }
+            BorrowedTrajectory route = value2.Binding.Route;
+            NoteData note = value2.Note;
+            bool flag = currentMsec >= note.time.msec && currentMsec <= note.end.msec && !GameManager.ForceHideNote(value2.Monitor);
+            value2.Body.enabled = flag;
+            if (value2.Guide != null)
+            {
+                value2.Guide.enabled = flag;
+            }
+            if (value2.TouchPetals != null)
+            {
+                SpriteRenderer[] touchPetals = value2.TouchPetals;
+                for (int num2 = 0; num2 < touchPetals.Length; num2++)
+                {
+                    touchPetals[num2].enabled = flag;
+                }
+            }
+            if (!flag)
+            {
+                continue;
+            }
+            float progress = MajdataSlideProgress(note, note.time.msec, route.Seconds * 1000f, currentMsec);
+            UnityEngine.Vector3 vector = MirrorBorrowed(value2.Path.Evaluate(progress), userOption.MirrorMode);
+            UnityEngine.Vector3 vector2 = MirrorBorrowed(value2.Path.Tangent(progress), userOption.MirrorMode);
+            value2.Body.transform.localPosition = vector * 100f;
+            bool flag2 = route.Family == "star" || route.Family == "hold" || route.Family == "touchhold";
+            value2.Body.transform.localRotation = UnityEngine.Quaternion.Euler(0f, 0f, flag2 ? (Mathf.Atan2(vector2.y, vector2.x) * 57.29578f + 18f) : 0f);
+            VisualNote visualNote = BorrowedVisual(note, route);
+            VisualValue visualValue = new VisualValue();
+            if (value != null && value.Streams.TryGetValue(VisualNotes.TryGetValue(note, out var value3) ? value3.Stream : "", out var value4))
+            {
+                visualValue = VisualState.Resolve(value4, currentMsec, visualNote);
+            }
+            VisualValue visualValue2 = new VisualValue
+            {
+                Color = (visualValue.Color ?? visualNote.Base.Color),
+                Alpha = (visualValue.Alpha ?? visualNote.Base.Alpha),
+                X = (visualValue.X ?? visualNote.Base.X),
+                Y = (visualValue.Y ?? visualNote.Base.Y)
+            };
+            float num3 = ((route.Family == "star") ? 1.5f : 1f);
+            value2.Body.transform.localScale = new UnityEngine.Vector3(num3 * (visualValue2.X ?? 1f), num3 * (visualValue2.Y ?? 1f), 1f);
+            if ((route.Family == "touch" || route.Family == "touchhold") && visualNote.Break && !visualValue2.Color.HasValue)
+            {
+                visualValue2.Color = 16737592;
+            }
+            BorrowedLook(value2.Body, value2.Picture, visualValue2, visualNote.Mine);
+            if (value2.TouchPetals != null)
+            {
+                SpriteRenderer[] touchPetals = value2.TouchPetals;
+                for (int num2 = 0; num2 < touchPetals.Length; num2++)
+                {
+                    BorrowedLook(touchPetals[num2], value2.TouchPetalPicture, visualValue2, visualNote.Mine);
+                }
+            }
+            if (!(value2.Guide == null))
+            {
+                float magnitude = vector.magnitude;
+                value2.Guide.enabled = magnitude > 0.001f;
+                value2.Guide.transform.localPosition = UnityEngine.Vector3.zero;
+                value2.Guide.transform.localRotation = UnityEngine.Quaternion.Euler(0f, 0f, Mathf.Atan2(vector.y, vector.x) * 57.29578f - 90f);
+                value2.Guide.transform.localScale = UnityEngine.Vector3.one * (magnitude / 4.8f);
+                BorrowedLook(value2.Guide, value2.GuidePicture, visualNote.Base, visualNote.Mine);
+            }
+        }
+    }
 }

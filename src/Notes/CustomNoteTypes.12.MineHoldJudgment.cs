@@ -1,20 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
 using MAI2.Util;
 using Manager;
-using MelonLoader;
 using Monitor;
-using Monitor.Game;
-using Process;
-using UnityEngine;
-using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
 
@@ -142,69 +133,98 @@ public partial class CustomNoteTypes
     /// <summary>头前使用 MNTAP 的按下窗口；持续阶段误碰只降为 Good，返回 true 表示已收尾。</summary>
     private static bool MineHoldTouchCheck(NoteBase note)
     {
-        if (IsFakeNoteOwner(note)) return false;
+        if (IsFakeNoteOwner(note))
+        {
+            return false;
+        }
         try
         {
-            if (note is not (MineHoldNote or MineBreakHoldNote or MineTouchHoldC)) return false;
-            var mineBehaviour = note.GetComponent<MineNoteBehaviour>();
-            if (mineBehaviour != null && !mineBehaviour.IsMine) return false;
-            if (MineHoldPenalties.ContainsKey(note) && note.GetJudgeResult() != NoteJudge.ETiming.End) return true;
-            if (note.GetJudgeResult() != NoteJudge.ETiming.End) return false;
-
-            var now = NotesManager.GetCurrentMsec();
-            var traverse = Traverse.Create(note);
-            var tail = traverse.Field("TailMsec").GetValue<float>();
-            // AppearMsec is the judgment time; StartMsec is only the visual spawn time.
-            var head = traverse.Field("AppearMsec").GetValue<float>();
-            if (now > tail) return false;
-            // Match MineAutoJudgePostfix's MNTAP cutoff, independent of note speed.
-            var beforeHead = now < head - 4.166667f;
-            bool down, held;
-            var button = (InputManager.ButtonSetting)traverse.Property("ButtonId").GetValue<int>();
+            if ((!(note is MineHoldNote) && !(note is MineBreakHoldNote) && !(note is MineTouchHoldC)) || 1 == 0)
+            {
+                return false;
+            }
+            MineNoteBehaviour component = note.GetComponent<MineNoteBehaviour>();
+            if (component != null && !component.IsMine)
+            {
+                return false;
+            }
+            if (MineHoldPenalties.ContainsKey(note) && note.GetJudgeResult() != NoteJudge.ETiming.End)
+            {
+                return true;
+            }
+            if (note.GetJudgeResult() != NoteJudge.ETiming.End)
+            {
+                return false;
+            }
+            float currentMsec = NotesManager.GetCurrentMsec();
+            Traverse traverse = Traverse.Create(note);
+            // Runs every frame for each unjudged mine hold, from spawn (NoteCheck is called from Execute). The three
+            // per-frame reads go through the FieldRefs / a getter delegate (same NoteBase members Traverse resolved;
+            // none is redeclared below NoteBase); the rarely taken penalty path below keeps its Traverse calls.
+            float value = TraverseRead(NoteRefs.TailMsec, note, "TailMsec");
+            float value2 = TraverseRead(NoteRefs.AppearMsec, note, "AppearMsec");
+            if (currentMsec > value)
+            {
+                return false;
+            }
+            bool flag = currentMsec < value2 - 4.166667f;
+            Func<NoteBase, int> buttonId = NoteRefs.ButtonId;
+            InputManager.ButtonSetting value3 = (InputManager.ButtonSetting)((buttonId != null) ? buttonId(note) : traverse.Property("ButtonId").GetValue<int>());
+            bool flag2;
+            bool flag3;
             if (note is TouchHoldC)
             {
-                down = traverse.Method("IsHoldTriggerDown").GetValue<bool>();
-                held = !beforeHead && traverse.Method("IsHoldTriggerPush").GetValue<bool>();
+                flag2 = traverse.Method("IsHoldTriggerDown").GetValue<bool>();
+                flag3 = !flag && traverse.Method("IsHoldTriggerPush").GetValue<bool>();
             }
             else
             {
-                down = PlayableNoteInput.InGameButtonDown(note.MonitorId, button, note) ||
-                       PlayableNoteInput.InGameTouchPanelAreaDown(note.MonitorId, button, note);
-                held = !beforeHead && (PlayableNoteInput.GetButtonPush(note.MonitorId, button, note) ||
-                       PlayableNoteInput.GetTouchPanelAreaPush(note.MonitorId, button, note));
+                flag2 = PlayableNoteInput.InGameButtonDown(note.MonitorId, value3, note) || PlayableNoteInput.InGameTouchPanelAreaDown(note.MonitorId, value3, note);
+                flag3 = !flag && (PlayableNoteInput.GetButtonPush(note.MonitorId, value3, note) || PlayableNoteInput.GetTouchPanelAreaPush(note.MonitorId, value3, note));
             }
-            if (!down && !held) return false;
-
-            // Preserve same-lane ordinary Tap ±150ms priority, including D-zone bindings.
-            if (note is not TouchHoldC && HasNormalTapInJudgeWindow((int)button, now, TryDZoneArea(note, out _)))
-                return false;
-
-            if (beforeHead)
+            if (!flag2 && !flag3)
             {
-                // Just holding before the window is not a MNTAP hit. A fresh down
-                // must also satisfy the native timing offset, note order and consumption.
-                var offset = Singleton<GamePlayManager>.Instance.GetGameScore(note.MonitorId).UserOption.GetJudgeTimingFrame();
-                if (now - offset * 16.666666f < head + note.GetJudgeStartMsec()) return false;
-                if (!traverse.Method("IsJudgeNote").GetValue<bool>()) return false;
-                var used = note is TouchHoldC
-                    ? traverse.Method("IsUsedThisFrameArea").GetValue<bool>()
-                    : PlayableNoteInput.IsUsedThisFrame(note.MonitorId, button, note);
-                if (used) return false;
-                var diff = now - head;
-                var timing = NoteJudge.GetJudgeTiming(ref diff, offset,
-                    traverse.Field("JudgeType").GetValue<NoteJudge.EJudgeType>());
-                if (timing == NoteJudge.ETiming.End || timing == NoteJudge.ETiming.TooLate) return false;
-                if (note is TouchHoldC) traverse.Method("SetUsedThisFrame").GetValue();
-                else PlayableNoteInput.SetUsedThisFrame(note.MonitorId, button, note);
+                return false;
+            }
+            if (!(note is TouchHoldC) && HasNormalTapInJudgeWindow((int)value3, currentMsec, TryDZoneArea(note, out var _)))
+            {
+                return false;
+            }
+            if (flag)
+            {
+                float judgeTimingFrame = Singleton<GamePlayManager>.Instance.GetGameScore(note.MonitorId).UserOption.GetJudgeTimingFrame();
+                if (currentMsec - judgeTimingFrame * 16.666666f < value2 + note.GetJudgeStartMsec())
+                {
+                    return false;
+                }
+                if (!traverse.Method("IsJudgeNote").GetValue<bool>())
+                {
+                    return false;
+                }
+                if ((note is TouchHoldC) ? traverse.Method("IsUsedThisFrameArea").GetValue<bool>() : PlayableNoteInput.IsUsedThisFrame(note.MonitorId, value3, note))
+                {
+                    return false;
+                }
+                float _fMsec = currentMsec - value2;
+                NoteJudge.ETiming judgeTiming = NoteJudge.GetJudgeTiming(ref _fMsec, judgeTimingFrame, traverse.Field("JudgeType").GetValue<NoteJudge.EJudgeType>());
+                if (judgeTiming == NoteJudge.ETiming.End || judgeTiming == NoteJudge.ETiming.TooLate)
+                {
+                    return false;
+                }
+                if (note is TouchHoldC)
+                {
+                    traverse.Method("SetUsedThisFrame").GetValue();
+                }
+                else
+                {
+                    PlayableNoteInput.SetUsedThisFrame(note.MonitorId, value3, note);
+                }
                 MineHoldPenalties[note] = NoteJudge.ETiming.TooLate;
-                traverse.Field("JudgeTimingDiffMsec").SetValue(diff);
+                traverse.Field("JudgeTimingDiffMsec").SetValue(_fMsec);
                 traverse.Field("JudgeResult").SetValue(NoteJudge.ETiming.TooLate);
                 traverse.Method("EndNote").GetValue();
                 return true;
             }
-
-            // No early EndNote, no Miss and no repeated score: the native tail
-            // writes its result once, then ApplyMineJudgeTiming applies this cap.
             MineHoldPenalties[note] = NoteJudge.ETiming.LateGood;
             return false;
         }

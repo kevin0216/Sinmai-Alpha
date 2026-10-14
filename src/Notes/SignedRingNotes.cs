@@ -1,3 +1,5 @@
+using MelonLoader;
+using SinmaiAlpha.ChartVisuals;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,59 +25,99 @@ public partial class CustomNoteTypes
 
     private static void SyncBreakHoldGlow(NoteBase owner, SpriteRenderer body)
     {
-        // Native Execute sized this layer before Alpha rewrote the Hold body.
-        // Reapply the final size for SV/HS/reversal and bounce presentations.
-        if (owner is BreakHoldNote && RingBreakEffect.GetValue(owner) is SpriteRenderer glow)
-            glow.size = body.size;
+        // Runs every frame for each ring/bounce hold body. BreakEffectSprite through NoteRefs.BreakHoldGlow, with the
+        // former FieldInfo read as fallback: same field, same reference, same reference-null `is` test.
+        if (owner is BreakHoldNote breakHoldNote)
+        {
+            AccessTools.FieldRef<BreakHoldNote, SpriteRenderer> breakHoldGlow = NoteRefs.BreakHoldGlow;
+            if (((breakHoldGlow != null) ? breakHoldGlow(breakHoldNote) : (RingBreakEffect.GetValue(owner) as SpriteRenderer)) is SpriteRenderer spriteRenderer)
+            {
+                spriteRenderer.size = body.size;
+            }
+        }
     }
 
-    private static bool RingVisualActive(int index, float appear, float duration, float spawn, float now, float destroy = SpawnJudgeLine, bool once = false)
+    private static bool RingVisualActive(int index, float appear, float duration, float spawn, float now, float destroy = 4.8f, bool once = false)
     {
-        if (!HsMultByNoteIndex.TryGetValue(index, out var hs)) return false;
-        // Conversion marks every note as ReferenceMotion. That selects the
-        // reference curve only when a chart actually changes movement; it must
-        // not replace native approach/scale timing at unit SV/HS and default
-        // radii. Keeping the native path here preserves the player's speed feel.
-        if (Math.Abs(hs - 1) > .00001f || Math.Abs(spawn - SpawnDefaultRadius) > .00001f ||
-            Math.Abs(destroy - SpawnJudgeLine) > .00001f || once) return true;
-        // Preserve native animation exactly when the entire relevant approach is
-        // unit scroll. A freeze and reversal can cancel in the total integral,
-        // so checking only two endpoints is insufficient.
-        if (!NoteScrollTableByNoteIndex.TryGetValue(index, out var table)) return false;
-        var from = Math.Min(now, appear - duration * 2);
-        var to = Math.Max(now, appear);
-        var origin = GetNoteScroll(index, from);
-        if (Math.Abs(GetNoteScroll(index, to) - origin - (to - from)) > .01f) return true;
-        foreach (var point in table)
-            if (point.Msec > from && point.Msec < to && Math.Abs(point.Scroll - origin - (point.Msec - from)) > .01f) return true;
+        if (!HsMultByNoteIndex.TryGetValue(index, out var value))
+        {
+            return false;
+        }
+        if ((Math.Abs(value - 1f) > 1E-05f || Math.Abs(spawn - 1.225f) > 1E-05f || Math.Abs(destroy - 4.8f) > 1E-05f) | once)
+        {
+            return true;
+        }
+        if (!NoteScrollTableByNoteIndex.TryGetValue(index, out List<(float, float, float)> value2))
+        {
+            return false;
+        }
+        float num = Math.Min(now, appear - duration * 2f);
+        float num2 = Math.Max(now, appear);
+        float noteScroll = GetNoteScroll(index, num);
+        if (Math.Abs(GetNoteScroll(index, num2) - noteScroll - (num2 - num)) > 0.01f)
+        {
+            return true;
+        }
+        // The table is sorted by msec (BuildNoteScrollTable sorts with float.CompareTo, NaN first, and its merge
+        // only raises the last entry), so once Item1 >= num2 no later entry can pass "Item1 < num2"; the scan stops
+        // there. NaN entries (and a NaN num2) never break, and the unchanged test rejects them as before.
+        for (int i = 0; i < value2.Count; i++)
+        {
+            (float, float, float) item = value2[i];
+            if (item.Item1 >= num2)
+            {
+                break;
+            }
+            if (item.Item1 > num && item.Item1 < num2 && Math.Abs(item.Item2 - noteScroll - (item.Item1 - num)) > 0.01f)
+            {
+                return true;
+            }
+        }
         return false;
     }
     private static bool TryRingPresentation(NoteBase owner, bool tail, out ScrollVisualTiming.Presentation presentation)
     {
         presentation = default;
-        if (owner == null || owner.IsEnd() || owner is TouchNoteB || owner is TouchHoldC) return false;
-        var index = owner.GetNoteIndex();
-        if (!SvScrollPosByNoteIndex.TryGetValue(index, out var target) || !SvTypeByNoteIndex.TryGetValue(index, out var type)) return false;
-        var appear = (float)FAppearMsec.GetValue(owner);
-        var now = NotesManager.GetCurrentMsec();
-        if (now < appear && BounceDurationByNoteIndex.TryGetValue(index, out var bounce) && bounce > 0) return false;
-        var duration = (float)FDefaultMsec.GetValue(owner);
-        var settings = RingSettings(index, appear, type);
-        if (duration <= 0 || !RingVisualActive(index, appear, duration, settings.Spawn, now, settings.Destroy, settings.Once)) return false;
-        var hs = HsMultByNoteIndex[index];
-        if (tail && !SvTailScrollPosByNoteIndex.TryGetValue(index, out target)) return false;
-        var speed = (ReferenceMotionByNoteIndex.Contains(index) ? RingViewSpeed(duration) * .001f : SpawnRadiusSpan / duration) * hs;
-        var everCrossed = settings.Once && RingEverCrossed(owner, tail, target, speed, settings, now);
-        presentation = ScrollVisualTiming.Ring(target, GetNoteScroll(index, now), speed, settings.Spawn, settings.Destroy, everCrossed);
-        if ((owner is HoldNote || owner is BreakHoldNote) && now >= (tail ? (float)FTailMsec.GetValue(owner) : appear) && presentation.Running)
-            presentation = new ScrollVisualTiming.Presentation(settings.Destroy, 1, true);
+        if (owner == null || owner.IsEnd() || owner is TouchNoteB || owner is TouchHoldC)
+        {
+            return false;
+        }
+        int noteIndex = owner.GetNoteIndex();
+        if (!SvScrollPosByNoteIndex.TryGetValue(noteIndex, out var value) || !SvTypeByNoteIndex.TryGetValue(noteIndex, out var value2))
+        {
+            return false;
+        }
+        float num = AppearMsecOf(owner);
+        float currentMsec = NotesManager.GetCurrentMsec();
+        if (currentMsec < num && BounceDurationByNoteIndex.TryGetValue(noteIndex, out var value3) && value3 > 0f)
+        {
+            return false;
+        }
+        float num2 = DefaultMsecOf(owner);
+        RingValue settings = RingSettings(noteIndex, num, value2);
+        if (num2 <= 0f || !RingVisualActive(noteIndex, num, num2, settings.Spawn, currentMsec, settings.Destroy, settings.Once))
+        {
+            return false;
+        }
+        float num3 = HsMultByNoteIndex[noteIndex];
+        if (tail && !SvTailScrollPosByNoteIndex.TryGetValue(noteIndex, out value))
+        {
+            return false;
+        }
+        float speed = (ReferenceMotionByNoteIndex.Contains(noteIndex) ? (RingViewSpeed(num2) * 0.001f) : (3.5750003f / num2)) * num3;
+        bool everCrossed = settings.Once && RingEverCrossed(owner, tail, value, speed, settings, currentMsec);
+        presentation = ScrollVisualTiming.Ring(value, GetNoteScroll(noteIndex, currentMsec), speed, settings.Spawn, settings.Destroy, everCrossed);
+        if ((owner is HoldNote || owner is BreakHoldNote) && currentMsec >= (tail ? TailMsecOf(owner) : num) && presentation.Running)
+        {
+            presentation = new ScrollVisualTiming.Presentation(settings.Destroy, 1f, running: true);
+        }
         return true;
     }
     private static float RingNativeY(NoteBase owner, float radius)
     {
-        var start = (float)FStartPos.GetValue(owner);
-        var end = (float)FEndPos.GetValue(owner);
-        return start + (end - start) * ((radius - SpawnDefaultRadius) / SpawnRadiusSpan);
+        float num = StartPosOf(owner);
+        float num2 = EndPosOf(owner);
+        return num + (num2 - num) * ((radius - 1.225f) / 3.5750003f);
     }
     private static float RingFirstVisibleTime(NoteData note, float duration)
     {
@@ -156,64 +198,89 @@ public partial class CustomNoteTypes
                 .Select(type => type.GetMethod("Execute", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
                 .Where(method => method != null && method.GetParameters().Length == 0).Distinct();
         }
-        [HarmonyPostfix, HarmonyPriority(Priority.Last)]
+        [HarmonyPostfix]
+        [HarmonyPriority(0)]
         public static void Postfix(NoteBase __instance)
         {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
+            if (!FeaturesEnabled(__instance))
+            {
+                return;
+            }
             try
             {
-                if (TryBounceHoldPresentation(__instance)) return;
-                if (!TryRingPresentation(__instance, false, out var head)) return;
-                var noteObject = (GameObject)RingNoteObject.GetValue(__instance);
-                if (noteObject == null) return;
-                var nativeSize = Singleton<GamePlayManager>.Instance.GetGameScore(__instance.MonitorId).UserOption.NoteSize.GetValue();
-                var y = RingNativeY(__instance, head.Radius);
-                var position = noteObject.transform.localPosition;
-                var orientation = 1f;
-                var isHold = __instance is HoldNote || __instance is BreakHoldNote;
-                if (isHold)
+                if (TryBounceHoldPresentation(__instance) || !TryRingPresentation(__instance, tail: false, out var presentation))
                 {
-                    var fields = Traverse.Create(__instance);
-                    var tailObject = fields.Field("EndPointObj").GetValue<GameObject>();
-                    var tail = TryRingPresentation(__instance, true, out var value) ? value : head;
-                    var tailY = RingNativeY(__instance, tail.Radius);
-                    var hasBody = head.Running && NotesManager.GetCurrentMsec() < (float)FTailMsec.GetValue(__instance);
-                    var height = hasBody ? Math.Abs(y - tailY) + 140f : 140f;
-                    if (hasBody) { orientation = y >= tailY ? 1 : -1; position.y = (y + tailY) * .5f; }
-                    else position.y = y;
-                    var sprite = (SpriteRenderer)RingSprite.GetValue(__instance);
-                    sprite.size = new Vector2(sprite.size.x, height);
-                    var ex = (SpriteRenderer)RingExSprite.GetValue(__instance);
-                    if (ex != null) ex.size = sprite.size;
-                    var effect = fields.Field("EffectSprite").GetValue<SpriteRenderer>();
-                    if (effect != null) effect.size = sprite.size;
-                    SyncBreakHoldGlow(__instance, sprite);
-                    if (tailObject != null)
+                    return;
+                }
+                GameObject gameObject = NoteObjectOf(__instance);
+                if (gameObject == null)
+                {
+                    return;
+                }
+                float value = Singleton<GamePlayManager>.Instance.GetGameScore(__instance.MonitorId).UserOption.NoteSize.GetValue();
+                float num = RingNativeY(__instance, presentation.Radius);
+                UnityEngine.Vector3 localPosition = gameObject.transform.localPosition;
+                float num2 = 1f;
+                bool flag = __instance is HoldNote || __instance is BreakHoldNote;
+                if (flag)
+                {
+                    GameObject value2 = EndPointOf(__instance);
+                    ScrollVisualTiming.Presentation presentation2 = (TryRingPresentation(__instance, tail: true, out var presentation3) ? presentation3 : presentation);
+                    float num3 = RingNativeY(__instance, presentation2.Radius);
+                    bool flag2 = presentation.Running && NotesManager.GetCurrentMsec() < TailMsecOf(__instance);
+                    float y = (flag2 ? (Math.Abs(num - num3) + 140f) : 140f);
+                    if (flag2)
                     {
-                        tailObject.SetActive(hasBody && tail.Running);
-                        var tailPosition = tailObject.transform.localPosition;
-                        tailPosition.y = tailY; tailObject.transform.localPosition = tailPosition;
-                        tailObject.transform.localScale = new Vector3(head.Scale, head.Scale, 1);
+                        num2 = ((num >= num3) ? 1 : (-1));
+                        localPosition.y = (num + num3) * 0.5f;
+                    }
+                    else
+                    {
+                        localPosition.y = num;
+                    }
+                    SpriteRenderer spriteRenderer = NoteSpriteOf(__instance);
+                    spriteRenderer.size = new UnityEngine.Vector2(spriteRenderer.size.x, y);
+                    SpriteRenderer spriteRenderer2 = NoteSpriteExOf(__instance);
+                    if (spriteRenderer2 != null)
+                    {
+                        spriteRenderer2.size = spriteRenderer.size;
+                    }
+                    SpriteRenderer value3 = EffectSpriteOf(__instance);
+                    if (value3 != null)
+                    {
+                        value3.size = spriteRenderer.size;
+                    }
+                    SyncBreakHoldGlow(__instance, spriteRenderer);
+                    if (value2 != null)
+                    {
+                        value2.SetActive(flag2 && presentation2.Running);
+                        UnityEngine.Vector3 localPosition2 = value2.transform.localPosition;
+                        localPosition2.y = num3;
+                        value2.transform.localPosition = localPosition2;
+                        value2.transform.localScale = new UnityEngine.Vector3(presentation.Scale, presentation.Scale, 1f);
                     }
                 }
-                else position.y = y;
-                noteObject.transform.localPosition = position;
-                noteObject.transform.localScale = new Vector3(head.Scale * nativeSize, head.Scale * (isHold ? orientation : nativeSize), 0);
-                var guide = (NoteGuide)RingGuide.GetValue(__instance);
-                if (guide != null)
+                else
                 {
-                    var scale = Math.Abs(head.Radius / SpawnJudgeLine);
-                    guide.transform.localScale = new Vector3(scale, scale, 1);
-                    guide.SetAlpha(head.Scale);
+                    localPosition.y = num;
                 }
-                // No input, NoteStat, JudgeResult, timing, queue, result or audio writes.
+                gameObject.transform.localPosition = localPosition;
+                gameObject.transform.localScale = new UnityEngine.Vector3(presentation.Scale * value, presentation.Scale * (flag ? num2 : value), 0f);
+                NoteGuide noteGuide = NoteGuideOf(__instance);
+                if (noteGuide != null)
+                {
+                    float num4 = Math.Abs(presentation.Radius / 4.8f);
+                    noteGuide.transform.localScale = new UnityEngine.Vector3(num4, num4, 1f);
+                    noteGuide.SetAlpha(presentation.Scale);
+                }
             }
-            catch (Exception error)
+            catch (Exception ex)
             {
-                if (_loggedRingVisualError) return;
-                _loggedRingVisualError = true;
-                MelonLoader.MelonLogger.Warning("[CustomNoteType] Signed ring presentation: " + error.Message);
+                if (!_loggedRingVisualError)
+                {
+                    _loggedRingVisualError = true;
+                    MelonLogger.Warning("[CustomNoteType] Signed ring presentation: " + ex.Message);
+                }
             }
         }
     }

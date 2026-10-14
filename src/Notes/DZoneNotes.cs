@@ -19,12 +19,9 @@ public static partial class CustomNoteTypes
         public int SourceKey;
     }
 
-    private static readonly ConditionalWeakTable<NoteData, DZonePosition> DZonePositions =
-        new ConditionalWeakTable<NoteData, DZonePosition>();
-    private static readonly ConditionalWeakTable<NoteBase, DZoneLane> DZoneOwners =
-        new ConditionalWeakTable<NoteBase, DZoneLane>();
-    private static readonly ConditionalWeakTable<Transform, DZoneLane> DZoneLanes =
-        new ConditionalWeakTable<Transform, DZoneLane>();
+    private static ConditionalWeakTable<NoteData, DZonePosition> DZonePositions = new ConditionalWeakTable<NoteData, DZonePosition>();
+    private static ConditionalWeakTable<NoteBase, DZoneLane> DZoneOwners = new ConditionalWeakTable<NoteBase, DZoneLane>();
+    private static ConditionalWeakTable<Transform, DZoneLane> DZoneLanes = new ConditionalWeakTable<Transform, DZoneLane>();
     private static int pendingDZoneKey { get => RuntimeCharts.Current.pendingDZoneKey; set => RuntimeCharts.Current.pendingDZoneKey = value; }
     private static bool removedDZoneMarker { get => RuntimeCharts.Current.removedDZoneMarker; set => RuntimeCharts.Current.removedDZoneMarker = value; }
 

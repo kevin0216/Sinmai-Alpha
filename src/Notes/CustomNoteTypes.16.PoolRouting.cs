@@ -1,18 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
 using Manager;
-using MelonLoader;
 using Monitor;
 using Monitor.Game;
-using Process;
 using UnityEngine;
 using SinmaiAlpha.Notes.Libs;
 
@@ -51,7 +44,7 @@ public partial class CustomNoteTypes
                 CustomNoteKind.MineTouchStar => MineTouchStarPools,
                 _ => null
             };
-            if (owners != null && owners.TryGetValue(instance, out var pools) && pools.TryGetValue(fieldName, out var pool)) return pool;
+            if (owners != null && owners.TryGetValue(instance, out var pools) && (pools.TryGetValue(fieldName, out var pool) || TryBuildDeferredMirrorPool(pools, instance, MirrorPoolSetOf(route.Kind), fieldName, out pool))) return pool;
         }
         return Traverse.Create(instance).Field(fieldName).GetValue();
     }
@@ -75,7 +68,17 @@ public partial class CustomNoteTypes
     private static List<BreakSlide> GetBreakArrowObjectList(GameCtrl instance, string fieldName) => (List<BreakSlide>)GetMinePoolList(instance, fieldName, typeof(BreakSlide));
 
     // note 类型（重定向后的基础类型）-> 该类型注册时读取的池字段。
+    // These sets are only queried or copied with UnionWith. Reuse them instead
+    // of allocating a HashSet and its buckets for every custom note registration.
+    private static readonly Dictionary<NotesTypeID.Def, HashSet<string>> MineFieldsByType = new();
     private static HashSet<string> GetMineFieldsForNoteType(NotesTypeID.Def type)
+    {
+        if (!MineFieldsByType.TryGetValue(type, out var fields))
+            MineFieldsByType.Add(type, fields = CreateMineFieldsForNoteType(type));
+        return fields;
+    }
+
+    private static HashSet<string> CreateMineFieldsForNoteType(NotesTypeID.Def type)
     {
         switch (type)
         {
@@ -165,10 +168,10 @@ public partial class CustomNoteTypes
 
     [HarmonyPrefix, HarmonyPriority(Priority.First + 50)]
     [HarmonyPatch(typeof(GameCtrl), "RegistNote")]
-    public static void RegistNotePrefix(GameCtrl __instance, object[] __args, out object __state)
+    public static void RegistNotePrefix(GameCtrl __instance, NoteData __0, out object __state)
     {
         // Enter even for stock charts: a nested call must mask its caller's route.
-        var note = __args?.FirstOrDefault(a => a is NoteData) as NoteData;
+        var note = __0;
         PoolRoute route = null;
         if (FeaturesEnabled(__instance) && note != null)
         {

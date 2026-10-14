@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using HarmonyLib;
 using MelonLoader;
 using Monitor;
@@ -19,10 +18,15 @@ public static class ExtraMode
 {
     internal const string Marker = "// SINMAI_ALPHA_MODE\t";
     private sealed class Stamp { public long Length, Ticks; public int CheckedAt; public string Mode; }
-    private sealed class Lease { public Sprite Original, Applied; }
+    private sealed class Lease
+    {
+        public Sprite Original, Applied;
+
+        public Image Owner;
+    }
     private static readonly Dictionary<string, Stamp> Charts = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, Sprite> Sprites = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly ConditionalWeakTable<Image, Lease> Images = new();
+    private static readonly Dictionary<int, Lease> Images = new Dictionary<int, Lease>();
     private static readonly string[] Screens = { "MSS", "TST", "TTR", "UPE" };
     [ThreadStatic] private static bool applying;
 
@@ -38,35 +42,68 @@ public static class ExtraMode
 
     internal static string ReadMode(string path)
     {
-        if (string.IsNullOrWhiteSpace(path)) return null;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
         try
         {
-            path = FileSystem.ResolvePath(path);
-            var now = Environment.TickCount;
-            // Animation callbacks run every frame. Do not stat the HDD on each
-            // badge update; metadata is revalidated at most once per second.
-            Charts.TryGetValue(path, out var previous);
-            if (previous != null && unchecked(now - previous.CheckedAt) >= 0 && unchecked(now - previous.CheckedAt) < 1000) return previous.Mode;
-            var info = new FileInfo(path);
-            if (!info.Exists) { Charts[path] = new Stamp { Length = -1, CheckedAt = now }; return null; }
-            if (previous != null && previous.Length == info.Length && previous.Ticks == info.LastWriteTimeUtc.Ticks)
-            { previous.CheckedAt = now; return previous.Mode; }
-            string mode = null;
-            using (var reader = File.OpenText(path))
-                for (var i = 0; i < 128; i++)
+            path = Resolve(path);
+            int tickCount = Environment.TickCount;
+            Charts.TryGetValue(path, out var value);
+            if (value != null && tickCount - value.CheckedAt >= 0 && tickCount - value.CheckedAt < 1000)
+            {
+                return value.Mode;
+            }
+            FileInfo fileInfo = new FileInfo(path);
+            if (!fileInfo.Exists)
+            {
+                Charts[path] = new Stamp
                 {
-                    var line = reader.ReadLine(); if (line == null) break;
-                    if (!line.StartsWith(Marker, StringComparison.Ordinal)) continue;
-                    var value = line.Substring(Marker.Length).Trim();
-                    if (value.Length > 0 && value.Length <= 40 && Array.TrueForAll(value.ToCharArray(), c =>
-                        c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-')) mode = value;
-                    break;
+                    Length = -1L,
+                    CheckedAt = tickCount
+                };
+                return null;
+            }
+            if (value != null && value.Length == fileInfo.Length && value.Ticks == fileInfo.LastWriteTimeUtc.Ticks)
+            {
+                value.CheckedAt = tickCount;
+                return value.Mode;
+            }
+            string text = null;
+            using (StreamReader streamReader = File.OpenText(path))
+            {
+                for (int i = 0; i < 128; i++)
+                {
+                    string text2 = streamReader.ReadLine();
+                    if (text2 == null)
+                    {
+                        break;
+                    }
+                    if (text2.StartsWith("// SINMAI_ALPHA_MODE\t", StringComparison.Ordinal))
+                    {
+                        string text3 = text2.Substring("// SINMAI_ALPHA_MODE\t".Length).Trim();
+                        if (text3.Length > 0 && text3.Length <= 40 && Array.TrueForAll(text3.ToCharArray(), (char c) => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+                        {
+                            text = text3;
+                        }
+                        break;
+                    }
                 }
-            Charts[path] = new Stamp { Length = info.Length, Ticks = info.LastWriteTimeUtc.Ticks, Mode = mode, CheckedAt = now };
-            return mode;
+            }
+            Charts[path] = new Stamp
+            {
+                Length = fileInfo.Length,
+                Ticks = fileInfo.LastWriteTimeUtc.Ticks,
+                Mode = text,
+                CheckedAt = tickCount
+            };
+            return text;
         }
-        catch (Exception error) when (error is IOException || error is UnauthorizedAccessException || error is ArgumentException || error is NotSupportedException)
-        { return null; }
+        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static string IconKey(string name)
@@ -158,26 +195,72 @@ public static class ExtraMode
 
     internal static void Apply(Image image)
     {
-        if (applying || image == null) return;
-        Images.TryGetValue(image, out var lease);
-        var native = lease != null && image.sprite == lease.Applied ? lease.Original : image.sprite;
-        var key = IconKey(native?.name);
-        if (key == null) { if (lease != null) { lease.Applied = null; lease.Original = null; } return; }
-        var mode = ReadMode(ExtraDifficulty.ModeChart(image, native.name));
-        var replacement = mode == null ? null : GetSprite(mode, key, native);
-        if (lease == null) lease = Images.GetValue(image, _ => new Lease());
-        lease.Original = native; lease.Applied = replacement;
-        var desired = replacement ?? native;
-        if (image.sprite == desired) return;
+        if (applying || image == null)
+        {
+            return;
+        }
+        int instanceID = image.GetInstanceID();
+        Images.TryGetValue(instanceID, out var value);
+        Sprite sprite = ((value != null && image.sprite == value.Applied) ? value.Original : image.sprite);
+        // IconKey(sprite?.name) and sprite.name from the per-sprite cache (reference null test as before).
+        NameKey nameKey = (((object)sprite != null) ? KeyOf(sprite) : null);
+        string text = nameKey?.Key;
+        if (text == null)
+        {
+            if (value != null)
+            {
+                value.Applied = null;
+                value.Original = null;
+            }
+            return;
+        }
+        string text2 = ReadMode(ExtraDifficulty.ModeChart(image, nameKey.Name));
+        Sprite sprite2 = ((text2 == null) ? null : GetSprite(text2, text, sprite));
+        if (value == null)
+        {
+            value = NewLease(image, instanceID);
+        }
+        value.Original = sprite;
+        value.Applied = sprite2;
+        Sprite sprite3 = sprite2 ?? sprite;
+        if (image.sprite == sprite3)
+        {
+            return;
+        }
         applying = true;
-        try { image.sprite = desired; }
-        finally { applying = false; }
+        try
+        {
+            image.sprite = sprite3;
+        }
+        finally
+        {
+            applying = false;
+        }
     }
 
     private static void Refresh(Component owner)
     {
-        if (owner == null) return;
-        foreach (var image in owner.GetComponentsInChildren<Image>(true)) Apply(image);
+        if (owner == null)
+        {
+            return;
+        }
+        // The same search as GetComponentsInChildren<Image>(true), into a pooled list instead of a new array per
+        // card bind / TrackStart / Result. A stack, not one shared list: Apply assigns sprites, which re-enters the
+        // setter postfix, and another patch on that path could reach Refresh again.
+        List<Image> list = ((RefreshBuffers.Count != 0) ? RefreshBuffers.Pop() : new List<Image>());
+        try
+        {
+            owner.GetComponentsInChildren(includeInactive: true, list);
+            for (int i = 0; i < list.Count; i++)
+            {
+                Apply(list[i]);
+            }
+        }
+        finally
+        {
+            list.Clear();
+            RefreshBuffers.Push(list);
+        }
     }
 
     [HarmonyPatch(typeof(Image), "sprite", MethodType.Setter)]
@@ -207,5 +290,95 @@ public static class ExtraMode
             yield return AccessTools.Method(typeof(ResultMonitor), "SetGameScoreType");
         }
         [HarmonyPostfix, HarmonyPriority(Priority.Last)] public static void Postfix(Component __instance) => Refresh(__instance);
+    }
+
+
+    private sealed class NameKey
+    {
+        public string Name;
+
+        public string Key;
+    }
+
+    private static readonly List<int> DeadLeases = new List<int>();
+
+    private static int leasePruneAt = 256;
+
+    private static readonly Dictionary<int, NameKey> SpriteKeys = new Dictionary<int, NameKey>();
+
+    private static readonly Dictionary<string, string> Resolved = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    private static readonly Stack<List<Image>> RefreshBuffers = new Stack<List<Image>>();
+
+    private static string Resolve(string path)
+    {
+        if (Resolved.TryGetValue(path, out var value))
+        {
+            return value;
+        }
+        value = FileSystem.ResolvePath(path);
+        if (path.Length >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/') && char.IsLetter(path[0]) && path.IndexOf('%') < 0)
+        {
+            if (Resolved.Count >= 4096)
+            {
+                Resolved.Clear();
+            }
+            Resolved[path] = value;
+        }
+        return value;
+    }
+
+    private static NameKey KeyOf(Sprite sprite)
+    {
+        int instanceID = sprite.GetInstanceID();
+        if (instanceID != 0 && SpriteKeys.TryGetValue(instanceID, out var value))
+        {
+            return value;
+        }
+        string name = sprite.name;
+        value = new NameKey
+        {
+            Name = name,
+            Key = IconKey(name)
+        };
+        if (instanceID != 0)
+        {
+            if (SpriteKeys.Count >= 8192)
+            {
+                SpriteKeys.Clear();
+            }
+            SpriteKeys[instanceID] = value;
+        }
+        return value;
+    }
+
+    private static Lease NewLease(Image image, int instanceID)
+    {
+        if (Images.TryGetValue(instanceID, out var value))
+        {
+            return value;
+        }
+        if (Images.Count >= leasePruneAt)
+        {
+            foreach (KeyValuePair<int, Lease> item in Images)
+            {
+                if (item.Value.Owner == null)
+                {
+                    DeadLeases.Add(item.Key);
+                }
+            }
+            for (int i = 0; i < DeadLeases.Count; i++)
+            {
+                Images.Remove(DeadLeases[i]);
+            }
+            DeadLeases.Clear();
+            leasePruneAt = Math.Max(256, 2 * Images.Count);
+        }
+        value = new Lease
+        {
+            Owner = image
+        };
+        Images[instanceID] = value;
+        return value;
     }
 }

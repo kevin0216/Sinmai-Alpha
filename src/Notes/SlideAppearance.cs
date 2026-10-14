@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -24,7 +23,7 @@ public partial class CustomNoteTypes
         public GameObject[] StarObjects;
         public readonly Dictionary<SpriteRenderer, (float Native, float Applied)> Alphas = new();
     }
-    private static readonly ConditionalWeakTable<SlideRoot, SlideAppearanceLease> SlideAppearances = new();
+    private static ConditionalWeakTable<SlideRoot, SlideAppearanceLease> SlideAppearances = new ConditionalWeakTable<SlideRoot, SlideAppearanceLease>();
     // DefaultMsec already comes from this player's native Sinmai note speed,
     // including legacy per-note multipliers. HS scales this velocity once;
     // SV scales elapsed scroll separately. Do not reinterpret the option label

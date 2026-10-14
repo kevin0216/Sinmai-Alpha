@@ -20,10 +20,12 @@ public partial class CustomNoteTypes
     [HarmonyPatch]
     public static class ChartReaderContextPatch
     {
-        public static IEnumerable<MethodBase> TargetMethods() => typeof(NotesReader)
-            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-            .Where(m => m.Name == "loadMa2" || m.Name == "loadDLMusicScore" || m.Name == "loadStr" ||
-                m.Name == "loadMa2Main" || m.Name == "loadNote" || m.Name == "calcTotal");
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            return from m in typeof(NotesReader).GetMethods(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                   where m.Name == "loadMa2" || m.Name == "loadDLMusicScore" || m.Name == "loadStr" || m.Name == "loadMa2Main" || m.Name == "calcTotal"
+                   select m;
+        }
         [HarmonyPrefix, HarmonyPriority(Priority.First + 100)]
         public static void Prefix(NotesReader __instance, MethodBase __originalMethod, object[] __args, out object __state)
         {
@@ -73,19 +75,27 @@ public partial class CustomNoteTypes
             "Initialize", "Execute", "GetNoteYPosition", "MoveStarLane", "NoteCheck",
             "Judge", "JudgeToolate", "SetAutoPlayJudge", "EndNote", "SetPlayResult", "SetForcePlayResult"
         };
-        public static IEnumerable<MethodBase> TargetMethods() => FakeOwnerMethods().Where(m => Names.Contains(m.Name));
-        [HarmonyPrefix, HarmonyPriority(Priority.First + 100)]
-        public static void Prefix(Component __instance, MethodBase __originalMethod, object[] __args, out object __state)
+        public static IEnumerable<MethodBase> TargetMethods()
         {
-            ChartRuntimeState state;
-            if (__originalMethod.Name == "Initialize" && __args.FirstOrDefault() is NoteData note)
-                state = RuntimeCharts.BindOwner(__instance, note);
-            else if (!RuntimeCharts.TryOwner(__instance, out state))
-                state = RuntimeMonitor(__instance is NoteBase ring ? ring.MonitorId : ((SlideRoot)__instance).MonitorId);
-            __state = RuntimeCharts.Enter(state);
+            return from m in FakeOwnerMethods()
+                   where Names.Contains(m.Name) && !IsNoteDataInitialize(m)
+                   select m;
         }
+
         [HarmonyFinalizer, HarmonyPriority(Priority.Last - 100)]
         public static void Finalizer(object __state) => RuntimeCharts.Exit(__state);
+
+
+        [HarmonyPrefix]
+        [HarmonyPriority(900)]
+        public static void Prefix(Component __instance, out object __state)
+        {
+            if (!RuntimeCharts.TryOwner(__instance, out var state))
+            {
+                state = RuntimeMonitor((__instance is NoteBase noteBase) ? noteBase.MonitorId : ((SlideRoot)__instance).MonitorId);
+            }
+            __state = RuntimeCharts.Enter(state);
+        }
     }
 
     [HarmonyPatch(typeof(GameScoreList), "SetResult")]
@@ -101,13 +111,26 @@ public partial class CustomNoteTypes
     [HarmonyPatch(typeof(GameProcess), "OnStart")]
     public static class ChartStartContextPatch
     {
-        [HarmonyPrefix, HarmonyPriority(Priority.First + 100)]
-        public static void Prefix() { RuntimeCharts.Reset(); ChartFeatureGate.BeginGame(); }
+        [HarmonyPrefix]
+        [HarmonyPriority(900)]
+        public static void Prefix()
+        {
+            RuntimeCharts.Reset();
+            ResetChartScopedTables();
+            ChartFeatureGate.BeginGame();
+        }
     }
     [HarmonyPatch(typeof(GameProcess), "OnRelease")]
     public static class ChartReleaseContextPatch
     {
         [HarmonyFinalizer, HarmonyPriority(Priority.Last - 100)]
-        public static void Finalizer() { RuntimeCharts.Reset(); ChartFeatureGate.EndGame(); MineAudio.ReleasePlayers(); }
+        public static void Finalizer()
+        {
+            RuntimeCharts.Reset();
+            ResetChartScopedTables();
+            ReleaseReaderTables();
+            ChartFeatureGate.EndGame();
+            MineAudio.ReleasePlayers();
+        }
     }
 }

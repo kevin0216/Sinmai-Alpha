@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using SinmaiAlpha.ChartVisuals;
-using SinmaiAlpha.Hosting;
 using SinmaiAlpha.Notes.Libs;
 using HarmonyLib;
 using Manager;
@@ -22,23 +21,38 @@ public partial class CustomNoteTypes
 
     private static NoiseRenderState ApplyNoisePresentation(GameMonitor owner, NotesReader reader, GameCtrl controller)
     {
-        if (owner == null || controller == null || reader == null ||
-            (NoisePlaybackStopped && !NotesManager.Instance(owner.MonitorIndex).IsPlaying()) ||
-            !NoiseCharts.TryGetValue(reader, out var chart) || chart.Events.Count == 0)
-        { ReleaseNoisePresentation(owner); return null; }
-        var pool = Traverse.Create(controller).Field("_touchCLauncherLayer").GetValue<GameObject>();
-        if (pool == null) { ReleaseNoisePresentation(owner); return null; }
-        if (NoisePresentationOwners.TryGetValue(owner, out var state) && state.Reader == reader && state.Parent == pool.transform)
-        { state.Update(); return state.Ready ? state : null; }
+        if (owner == null || controller == null || reader == null || (NoisePlaybackStopped && !NotesManager.Instance(owner.MonitorIndex).IsPlaying()) || !NoiseCharts.TryGetValue(reader, out var value) || value.Events.Count == 0)
+        {
+            ReleaseNoisePresentation(owner);
+            return null;
+        }
+        GameObject value2 = TouchCLauncherOf(controller);
+        if (value2 == null)
+        {
+            ReleaseNoisePresentation(owner);
+            return null;
+        }
+        if (NoisePresentationOwners.TryGetValue(owner, out var value3) && value3.Reader == reader && value3.Parent == value2.transform)
+        {
+            value3.Update();
+            if (!value3.Ready)
+            {
+                return null;
+            }
+            return value3;
+        }
         ReleaseNoisePresentation(owner);
         try
         {
-            state = new NoiseRenderState(owner, reader, pool.transform, chart.Events);
-            NoisePresentationOwners.Add(owner, state);
-            return state;
+            value3 = new NoiseRenderState(owner, reader, value2.transform, value.Events);
+            NoisePresentationOwners.Add(owner, value3);
+            return value3;
         }
-        catch (Exception error)
-        { MelonLogger.Warning("[Noise Zone] Display unavailable: " + error.Message); return null; }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning("[Noise Zone] Display unavailable: " + ex.Message);
+            return null;
+        }
     }
     private static void ReleaseNoisePresentation(GameMonitor owner)
     {
@@ -51,8 +65,16 @@ public partial class CustomNoteTypes
         { pair.Value.Dispose(); NoisePresentationOwners.Remove(pair.Key); }
     }
     private static bool NoiseInputDisplayReady(int monitor, NotesReader reader)
-        => NoisePresentationOwners.Any(p => p.Key != null && p.Key.MonitorIndex == monitor &&
-            p.Value.Reader == reader && p.Value.InputReady && p.Value.Parent != null && p.Value.Parent.gameObject.activeInHierarchy);
+    {
+        foreach (KeyValuePair<GameMonitor, NoiseRenderState> noisePresentationOwner in NoisePresentationOwners)
+        {
+            if (noisePresentationOwner.Key != null && noisePresentationOwner.Key.MonitorIndex == monitor && noisePresentationOwner.Value.Reader == reader && noisePresentationOwner.Value.InputReady && noisePresentationOwner.Value.Parent != null && noisePresentationOwner.Value.Parent.gameObject.activeInHierarchy)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     internal sealed class NoiseRenderState : IDisposable
     {
@@ -78,24 +100,41 @@ public partial class CustomNoteTypes
 
         internal NoiseRenderState(GameMonitor owner, NotesReader reader, Transform parent, IEnumerable<NoiseZoneEvent> events)
         {
-            Owner = owner; Reader = reader; Parent = parent;
+            Owner = owner;
+            Reader = reader;
+            Parent = parent;
             try
             {
-                NoiseGraphics.Acquire(); acquired = true;
-                root = new GameObject("AquaMai native noise fields") { hideFlags = HideFlags.HideAndDontSave, layer = parent.gameObject.layer };
-                root.transform.SetParent(parent, false);
-                // Native note/TouchSlide coordinates use 100 pixels per source unit.
-                root.transform.localScale = Vector3.one * 100;
+                NoiseGraphics.Acquire();
+                acquired = true;
+                root = new GameObject("AquaMai native noise fields")
+                {
+                    hideFlags = HideFlags.HideAndDontSave,
+                    layer = parent.gameObject.layer
+                };
+                root.transform.SetParent(parent, worldPositionStays: false);
+                root.transform.localScale = UnityEngine.Vector3.one * 100f;
                 Display = root.AddComponent<NoiseZoneDisplay>();
-                var nativeRenderer = parent.GetComponentInChildren<Renderer>(true);
-                Display.Configure(events, () => NotesManager.GetCurrentMsec() / 1000d, NoiseGraphics.Centers,
-                    NoiseGraphics.Warning, parent.gameObject.layer, nativeRenderer != null ? nativeRenderer.sortingLayerID : 0);
+                Renderer componentInChildren = parent.GetComponentInChildren<Renderer>(includeInactive: true);
+                Display.Configure(events, () => (double)NotesManager.GetCurrentMsec() / 1000.0, NoiseGraphics.Centers, NoiseGraphics.Warning, parent.gameObject.layer, (componentInChildren != null) ? componentInChildren.sortingLayerID : 0);
                 compositor = new NoiseZoneCompositor(NoiseGraphics.Composite, NoiseGraphics.Displacement, NoiseGraphics.Spark);
-                copy = new Material(NoiseGraphics.Composite) { hideFlags = HideFlags.HideAndDontSave };
+                copy = new Material(NoiseGraphics.Composite)
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
                 copy.SetTexture("_Masks", NoiseGraphics.EmptyMask);
-                copy.SetFloat("_AlphaClipSpace", 0);
+                copy.SetFloat("_AlphaClipSpace", 0f);
+                WarmUp();
+                // The warning, visible-zone and composite paths were compiled at the first NZONE warning and the first
+                // visible zone, mid-song (about 2.5 and 3.3 ms on the game's Mono). Compile them with the GPU programs
+                // above (see JitWarmup); their type initialisers (GlowWeights, an empty array, lambda caches) are pure.
+                JitWarmup.Compile(typeof(NoiseZoneDisplay), typeof(NoiseZoneCompositor), typeof(NoiseRenderState), typeof(NoiseZoneGeometry), typeof(NoiseZoneTimeline));
             }
-            catch { Dispose(); throw; }
+            catch
+            {
+                Dispose();
+                throw;
+            }
         }
         internal void Update()
         { if (Ready) Display.RenderAt(NotesManager.GetCurrentMsec() / 1000d); }
@@ -105,34 +144,45 @@ public partial class CustomNoteTypes
             if (!captured) { capturedCamera = null; capturedFrame = -1; return; }
             Update(); fieldAtRender = Display.FieldMatrix; capturedCamera = camera; capturedFrame = Time.frameCount;
         }
-        internal bool TryDraw(RenderTexture source, RenderTexture destination, Camera camera,
-            PresentationRect bounds, PresentationRect visible, PresentationRect playfield)
+        internal bool TryDraw(RenderTexture source, RenderTexture destination, Camera camera, PresentationRect bounds, PresentationRect visible, PresentationRect playfield)
         {
-            if (!Ready || !captured || capturedCamera != camera || !Display.HasActive || !bounds.HasArea || !visible.HasArea) return false;
-            var previous = RenderTexture.active;
+            if (!CanDraw(camera) || !bounds.HasArea || !visible.HasArea)
+            {
+                return false;
+            }
+            RenderTexture active = RenderTexture.active;
             try
             {
-                var width = Math.Max(1, Mathf.RoundToInt(source.width * bounds.Width));
-                var height = Math.Max(1, Mathf.RoundToInt(source.height * bounds.Height));
-                EnsureTargets(width, height, source.format);
-                Graphics.SetRenderTarget(input); GL.Clear(false, true, Color.black);
-                Draw(input, PixelRect(Relative(visible, bounds), width, height), source, visible);
-                var material = compositor.Prepare(Display, camera, width, height, fieldAtRender, bounds);
-                if (material == null) return false;
-                var rect = Relative(playfield, bounds);
-                material.SetFloat("_AlphaClipSpace", 1);
-                material.SetVector("_BlitScaleBias", new Vector4(1, 1, 0, 0));
-                material.SetVector("_PlayfieldRect", new Vector4(rect.X, rect.Y, rect.Right, rect.Top));
+                int num = Math.Max(1, Mathf.RoundToInt((float)source.width * bounds.Width));
+                int num2 = Math.Max(1, Mathf.RoundToInt((float)source.height * bounds.Height));
+                EnsureTargets(num, num2, source.format);
+                Graphics.SetRenderTarget(input);
+                GL.Clear(clearDepth: false, clearColor: true, Color.black);
+                Draw(input, PixelRect(Relative(visible, bounds), num, num2), source, visible);
+                Material material = compositor.Prepare(Display, camera, num, num2, fieldAtRender, bounds);
+                if (material == null)
+                {
+                    return false;
+                }
+                PresentationRect presentationRect = Relative(playfield, bounds);
+                material.SetFloat("_AlphaClipSpace", 1f);
+                material.SetVector("_BlitScaleBias", new UnityEngine.Vector4(1f, 1f, 0f, 0f));
+                material.SetVector("_PlayfieldRect", new UnityEngine.Vector4(presentationRect.X, presentationRect.Y, presentationRect.Right, presentationRect.Top));
                 Graphics.Blit(input, output, material, 3);
                 Draw(destination, PixelRect(visible, source.width, source.height), output, Relative(visible, bounds));
                 return true;
             }
-            catch (Exception error)
+            catch (Exception ex)
             {
-                failed = true; MelonLogger.Warning("[Noise Zone] Native player composite unavailable: " + error.Message);
-                Dispose(); return false;
+                failed = true;
+                MelonLogger.Warning("[Noise Zone] Native player composite unavailable: " + ex.Message);
+                Dispose();
+                return false;
             }
-            finally { RenderTexture.active = previous; }
+            finally
+            {
+                RenderTexture.active = active;
+            }
         }
         private void EnsureTargets(int width, int height, RenderTextureFormat format)
         {
@@ -174,6 +224,101 @@ public partial class CustomNoteTypes
             if (copy != null) Object.Destroy(copy); copy = null;
             if (root != null) Object.Destroy(root); root = null;
             if (acquired) { acquired = false; NoiseGraphics.Release(); }
+        }
+
+
+        private bool targetsPrepared;
+
+        private static void WarmUp()
+        {
+            RenderTexture active = RenderTexture.active;
+            RenderTexture renderTexture = null;
+            Material material = null;
+            Material material2 = null;
+            try
+            {
+                renderTexture = RenderTexture.GetTemporary(8, 8, 0, RenderTextureFormat.ARGB32);
+                material = new Material(NoiseGraphics.Composite)
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                for (int i = 0; i < 4; i++)
+                {
+                    Graphics.Blit(Texture2D.blackTexture, renderTexture, material, i);
+                }
+                material2 = new Material(NoiseGraphics.Warning)
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                Graphics.Blit(Texture2D.blackTexture, renderTexture, material2, 0);
+            }
+            catch (Exception)
+            {
+            }
+            finally
+            {
+                if (material != null)
+                {
+                    UnityEngine.Object.Destroy(material);
+                }
+                if (material2 != null)
+                {
+                    UnityEngine.Object.Destroy(material2);
+                }
+                if (renderTexture != null)
+                {
+                    RenderTexture.ReleaseTemporary(renderTexture);
+                }
+                RenderTexture.active = active;
+            }
+        }
+
+        internal bool NeedsTargets
+        {
+            get
+            {
+                if (!targetsPrepared)
+                {
+                    return Ready;
+                }
+                return false;
+            }
+        }
+
+        internal void PrepareTargets(RenderTexture source, PresentationRect bounds)
+        {
+            if (!NeedsTargets)
+            {
+                return;
+            }
+            targetsPrepared = true;
+            RenderTexture active = RenderTexture.active;
+            try
+            {
+                int num = Math.Max(1, Mathf.RoundToInt((float)source.width * bounds.Width));
+                int num2 = Math.Max(1, Mathf.RoundToInt((float)source.height * bounds.Height));
+                EnsureTargets(num, num2, source.format);
+                compositor.Ensure(num, num2);
+            }
+            catch (Exception)
+            {
+                ReleaseTarget(ref input);
+                ReleaseTarget(ref output);
+                compositor?.Dispose();
+            }
+            finally
+            {
+                RenderTexture.active = active;
+            }
+        }
+
+        internal bool CanDraw(Camera camera)
+        {
+            if (Ready && captured && capturedCamera == camera)
+            {
+                return Display.HasActive;
+            }
+            return false;
         }
     }
     private static class NoiseGraphics

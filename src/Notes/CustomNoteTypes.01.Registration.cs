@@ -1,18 +1,13 @@
+using SinmaiAlpha.ChartVisuals;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
 using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
 using Manager;
 using MelonLoader;
-using Monitor;
-using Monitor.Game;
-using Process;
 using UnityEngine;
 using SinmaiAlpha.Notes.Libs;
 
@@ -48,9 +43,9 @@ public partial class CustomNoteTypes
     private static bool _pendingTouchStarForCurrentLoad { get => RuntimeCharts.Current._pendingTouchStarForCurrentLoad; set => RuntimeCharts.Current._pendingTouchStarForCurrentLoad = value; }
 
     // findID is called in a batch before loadNote, so use queues to keep mine flags in chart order.
-    private static Queue<bool> PendingMineFlags => RuntimeCharts.Current.PendingMineFlags;
-    private static Queue<bool> PendingTouchBreakFlags => RuntimeCharts.Current.PendingTouchBreakFlags;
-    private static Queue<bool> PendingTouchStarFlags => RuntimeCharts.Current.PendingTouchStarFlags;
+
+
+
 
     public static void OnAfterPatch()
     {
@@ -63,154 +58,532 @@ public partial class CustomNoteTypes
         AllNoteTypeNames.Add("MBTHO");
         AllNoteTypeNames.Add("NMSTP");
         AllNoteTypeNames.Add("BRSTP");
-
-        var arrayTraverse = Traverse.Create(typeof(Ma2fileRecordID)).Field("s_Ma2fileRecord_Data");
-        var targetArray = arrayTraverse.GetValue<Array>();
-
-        var nextId = targetArray.Length;
-        List<object[]> newEntries =
-        [
-            [nextId++, "NMSSS", "过新过热Slide", NotesTypeID.Def.Slide, SlideType.Slide_MAX, 8, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "BRSSS", "过新过热BreakSlide", NotesTypeID.Def.BreakSlide, SlideType.Slide_MAX, 8, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-
-            // ========== 地雷键 ==========
-            // 命名规则（2026-08 用户定版）：
-            //   MN = 普通(NM) 的地雷版
-            //   MB = Break(BR) 的地雷版
-            //   MX = Ex(EX) 的地雷版
-            //   MZ = ExBreak(BX) 的地雷版
-            //   BR = 绝赞系（非地雷）：BRTTP = 绝赞 touch、BRTHO = 绝赞 touchhold
-            //   MB = 地雷绝赞：MBTTP = 地雷绝赞 touch、MBTHO = 地雷绝赞 touchhold
-
-            // MN: 普通地雷 (NMTAP->MNTAP, NMHLD->MNHLD, ...)
-            [nextId++, "MNTAP", "地雷Tap", NotesTypeID.Def.Tap, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MNHLD", "地雷Hold", NotesTypeID.Def.Hold, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MNSTR", "地雷Star", NotesTypeID.Def.Star, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MNSSS", "地雷Slide", NotesTypeID.Def.Slide, SlideType.Slide_MAX, 8, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MNTTP", "地雷Touch", NotesTypeID.Def.TouchTap, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MBTTP", "地雷绝赞Touch", NotesTypeID.Def.TouchTap, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MNTHO", "地雷TouchHold", NotesTypeID.Def.TouchHold, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MBTHO", "地雷绝赞TouchHold", NotesTypeID.Def.TouchHold, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-
-            // MB: Break 地雷 (BRTAP->MBTAP, BRHLD->MBHLD, ...)
-            [nextId++, "MBTAP", "地雷BreakTap", NotesTypeID.Def.Break, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MBHLD", "地雷BreakHold", NotesTypeID.Def.BreakHold, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MBSTR", "地雷BreakStar", NotesTypeID.Def.BreakStar, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MBSSS", "地雷BreakSlide", NotesTypeID.Def.BreakSlide, SlideType.Slide_MAX, 8, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-
-            // MZ: ExBreak 地雷 (BXTAP->MZTAP, BXHLD->MZHLD, ...)
-            [nextId++, "MZTAP", "地雷ExBreakTap", NotesTypeID.Def.ExBreakTap, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MZHLD", "地雷ExBreakHold", NotesTypeID.Def.ExBreakHold, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MZSTR", "地雷ExBreakStar", NotesTypeID.Def.ExBreakStar, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-
-            // MX: Ex 地雷 (EXTAP->MXTAP, EXHLD->MXHLD, ...)
-            [nextId++, "MXTAP", "地雷ExTap", NotesTypeID.Def.Tap, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MXHLD", "地雷ExHold", NotesTypeID.Def.Hold, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-            [nextId++, "MXSTR", "地雷ExStar", NotesTypeID.Def.Star, SlideType.Slide_Straight, 0, Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0],
-        ];
-
-        foreach (var visualTag in new[] { "COLORV", "SIZEV", "ALPHAV", "SVSP", "HS", "SPAWN", "SPAWNMODE", "DESTROY", "BOUNCE",
-                     "SHOWJUDGEINFO", "SHOWCOMBOINFO", "SHOWJUDGETEXT", "COMBODISPLAY", "INNERBRIGHTNESS", "OUTERBRIGHTNESS", "SHAKE", "FLASH", "FADE", "TINT", "GAUSSIAN", "NEON", "TRAIL", "BRIGHTNESS", "SATURATION", "CONTRAST", "RAINBOW", "VIGNETTE", "ZOOM", "GLITCH", "TVNOISE", "HUE", "MOVE", "ROTATE", "TEXT", "AUDIO", "PVOVERLAY" })
-            newEntries.Add([nextId++, visualTag, "音符即时外观", NotesTypeID.Def.Invalid, SlideType.Slide_INVALID, 4,
-                Ma2Category.MA2_Composition, 2, 2, 0, 0, 0, 0, 0]);
-
-        // Register mine variants for all normal (non-break) native slide types.
-        string[] mineSlideBases =
-        [
-            "NMSCR", "NMSCL", "NMSI_", "NMSLL", "NMSLR",
-            "NMSUL", "NMSUR", "NMSXL", "NMSXR", "NMSF_",
-            "NMSV_", "NMSSL", "NMSSR", "NMSL_", "NMSR_",
-            "NMSU_", "NMSD_", "NMSNL", "NMSNR", "NMSFL",
-            "NMSFR",
-        ];
-
-        foreach (var baseName in mineSlideBases)
+        Traverse traverse = Traverse.Create(typeof(Ma2fileRecordID)).Field("s_Ma2fileRecord_Data");
+        Array value = traverse.GetValue<Array>();
+        int length = value.Length;
+        List<object[]> list = new List<object[]>(20);
+        list.Add(new object[14]
         {
-            var mineName = "MN" + baseName.Substring(2);
-            newEntries.Add(
-            [
-                nextId++, mineName, "地雷" + baseName, NotesTypeID.Def.Slide, SlideType.Slide_MAX, 8,
-                Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0,
-            ]);
-        }
-
-        // Register mine variants for Break native slide types.
-        string[] breakSlideBases =
-        [
-            "BRSCR", "BRSCL", "BRSI_", "BRSLL", "BRSLR",
-            "BRSUL", "BRSUR", "BRSXL", "BRSXR", "BRSF_",
-            "BRSV_", "BRSSL", "BRSSR", "BRSL_", "BRSR_",
-            "BRSU_", "BRSD_", "BRSNL", "BRSNR", "BRSFL",
-            "BRSFR",
-        ];
-
-        foreach (var baseName in breakSlideBases)
+            length++,
+            "NMSSS",
+            "过新过热Slide",
+            NotesTypeID.Def.Slide,
+            SlideType.Slide_MAX,
+            8,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
         {
-            var mineName = "MB" + baseName.Substring(2);
-            newEntries.Add(
-            [
-                nextId++, mineName, "地雷" + baseName, NotesTypeID.Def.BreakSlide, SlideType.Slide_MAX, 8,
-                Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0,
-            ]);
-        }
-
-        // Register mine variants for ExBreak native slide types.
-        string[] exBreakSlideBases =
-        [
-            "BXSCR", "BXSCL", "BXSI_", "BXSLL", "BXSLR",
-            "BXSUL", "BXSUR", "BXSXL", "BXSXR", "BXSF_",
-            "BXSV_", "BXSSL", "BXSSR", "BXSL_", "BXSR_",
-            "BXSU_", "BXSD_", "BXSNL", "BXSNR", "BXSFL",
-            "BXSFR",
-        ];
-
-        foreach (var baseName in exBreakSlideBases)
+            length++,
+            "BRSSS",
+            "过新过热BreakSlide",
+            NotesTypeID.Def.BreakSlide,
+            SlideType.Slide_MAX,
+            8,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
         {
-            var mineName = "MZ" + baseName.Substring(2);
-            newEntries.Add(
-            [
-                nextId++, mineName, "地雷" + baseName, NotesTypeID.Def.ExBreakSlide, SlideType.Slide_MAX, 8,
-                Ma2Category.MA2_Note, 2, 2, 2, 2, 2, 2, 0,
-            ]);
+            length++,
+            "MNTAP",
+            "地雷Tap",
+            NotesTypeID.Def.Begin,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MNHLD",
+            "地雷Hold",
+            NotesTypeID.Def.Hold,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MNSTR",
+            "地雷Star",
+            NotesTypeID.Def.Star,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MNSSS",
+            "地雷Slide",
+            NotesTypeID.Def.Slide,
+            SlideType.Slide_MAX,
+            8,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MNTTP",
+            "地雷Touch",
+            NotesTypeID.Def.TouchTap,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MBTTP",
+            "地雷绝赞Touch",
+            NotesTypeID.Def.TouchTap,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MNTHO",
+            "地雷TouchHold",
+            NotesTypeID.Def.TouchHold,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MBTHO",
+            "地雷绝赞TouchHold",
+            NotesTypeID.Def.TouchHold,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MBTAP",
+            "地雷BreakTap",
+            NotesTypeID.Def.Break,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MBHLD",
+            "地雷BreakHold",
+            NotesTypeID.Def.BreakHold,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MBSTR",
+            "地雷BreakStar",
+            NotesTypeID.Def.BreakStar,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MBSSS",
+            "地雷BreakSlide",
+            NotesTypeID.Def.BreakSlide,
+            SlideType.Slide_MAX,
+            8,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MZTAP",
+            "地雷ExBreakTap",
+            NotesTypeID.Def.ExBreakTap,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MZHLD",
+            "地雷ExBreakHold",
+            NotesTypeID.Def.ExBreakHold,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MZSTR",
+            "地雷ExBreakStar",
+            NotesTypeID.Def.ExBreakStar,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MXTAP",
+            "地雷ExTap",
+            NotesTypeID.Def.Begin,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MXHLD",
+            "地雷ExHold",
+            NotesTypeID.Def.Hold,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        list.Add(new object[14]
+        {
+            length++,
+            "MXSTR",
+            "地雷ExStar",
+            NotesTypeID.Def.Star,
+            SlideType.Slide_Straight,
+            0,
+            Ma2Category.MA2_Note,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            0
+        });
+        List<object[]> list2 = list;
+        string[] array = new string[36]
+        {
+            "COLORV", "SIZEV", "ALPHAV", "SVSP", "HS", "SPAWN", "SPAWNMODE", "DESTROY", "BOUNCE", "SHOWJUDGEINFO",
+            "SHOWCOMBOINFO", "SHOWJUDGETEXT", "COMBODISPLAY", "INNERBRIGHTNESS", "OUTERBRIGHTNESS", "SHAKE", "FLASH", "FADE", "TINT", "GAUSSIAN",
+            "NEON", "TRAIL", "BRIGHTNESS", "SATURATION", "CONTRAST", "RAINBOW", "VIGNETTE", "ZOOM", "GLITCH", "TVNOISE",
+            "HUE", "MOVE", "ROTATE", "TEXT", "AUDIO", "PVOVERLAY"
+        };
+        foreach (string text in array)
+        {
+            list2.Add(new object[14]
+            {
+                length++,
+                text,
+                "音符即时外观",
+                NotesTypeID.Def.Invalid,
+                SlideType.Slide_INVALID,
+                4,
+                Ma2Category.MA2_Composition,
+                2,
+                2,
+                0,
+                0,
+                0,
+                0,
+                0
+            });
         }
-
-
-        // Append after all prior records to preserve their IDs.
-        newEntries.Add([nextId++, "NZONE", "噪域事件", NotesTypeID.Def.Invalid, SlideType.Slide_INVALID, 4,
-            Ma2Category.MA2_Composition, 2, 2, 0, 0, 0, 0, 0]);
-        foreach (var filter in SinmaiAlpha.ChartVisuals.ExtraScreenFilters.All)
-            newEntries.Add([nextId++, filter.Tag, "Alpha屏幕滤镜", NotesTypeID.Def.Invalid, SlideType.Slide_INVALID, 4,
-                Ma2Category.MA2_Composition, 2, 2, 0, 0, 0, 0, 0]);
-
-        ChartFeatureGate.RegisterExtensions(newEntries.Select(e => (string)e[1]).Concat(AllNoteTypeNames));
-        // Ma2fileRecordID.Ma2fileRecord_Data is private, so we need this shit.
-        var structType = targetArray.GetValue(0).GetType();
-        var constructor = AccessTools.Constructor(structType,
-        [
-            typeof(int), typeof(string), typeof(string), typeof(NotesTypeID.Def), typeof(SlideType), typeof(int),
-            typeof(Ma2Category), typeof(int), typeof(int), typeof(int), typeof(int), typeof(int), typeof(int),
+        array = new string[21]
+        {
+            "NMSCR", "NMSCL", "NMSI_", "NMSLL", "NMSLR", "NMSUL", "NMSUR", "NMSXL", "NMSXR", "NMSF_",
+            "NMSV_", "NMSSL", "NMSSR", "NMSL_", "NMSR_", "NMSU_", "NMSD_", "NMSNL", "NMSNR", "NMSFL",
+            "NMSFR"
+        };
+        foreach (string text2 in array)
+        {
+            string text3 = "MN" + text2.Substring(2);
+            list2.Add(new object[14]
+            {
+                length++,
+                text3,
+                "地雷" + text2,
+                NotesTypeID.Def.Slide,
+                SlideType.Slide_MAX,
+                8,
+                Ma2Category.MA2_Note,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                0
+            });
+        }
+        array = new string[21]
+        {
+            "BRSCR", "BRSCL", "BRSI_", "BRSLL", "BRSLR", "BRSUL", "BRSUR", "BRSXL", "BRSXR", "BRSF_",
+            "BRSV_", "BRSSL", "BRSSR", "BRSL_", "BRSR_", "BRSU_", "BRSD_", "BRSNL", "BRSNR", "BRSFL",
+            "BRSFR"
+        };
+        foreach (string text4 in array)
+        {
+            string text5 = "MB" + text4.Substring(2);
+            list2.Add(new object[14]
+            {
+                length++,
+                text5,
+                "地雷" + text4,
+                NotesTypeID.Def.BreakSlide,
+                SlideType.Slide_MAX,
+                8,
+                Ma2Category.MA2_Note,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                0
+            });
+        }
+        array = new string[21]
+        {
+            "BXSCR", "BXSCL", "BXSI_", "BXSLL", "BXSLR", "BXSUL", "BXSUR", "BXSXL", "BXSXR", "BXSF_",
+            "BXSV_", "BXSSL", "BXSSR", "BXSL_", "BXSR_", "BXSU_", "BXSD_", "BXSNL", "BXSNR", "BXSFL",
+            "BXSFR"
+        };
+        foreach (string text6 in array)
+        {
+            string text7 = "MZ" + text6.Substring(2);
+            list2.Add(new object[14]
+            {
+                length++,
+                text7,
+                "地雷" + text6,
+                NotesTypeID.Def.ExBreakSlide,
+                SlideType.Slide_MAX,
+                8,
+                Ma2Category.MA2_Note,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                0
+            });
+        }
+        list2.Add(new object[14]
+        {
+            length++,
+            "NZONE",
+            "噪域事件",
+            NotesTypeID.Def.Invalid,
+            SlideType.Slide_INVALID,
+            4,
+            Ma2Category.MA2_Composition,
+            2,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0
+        });
+        ExtraScreenFilters.Definition[] all = ExtraScreenFilters.All;
+        foreach (ExtraScreenFilters.Definition definition in all)
+        {
+            list2.Add(new object[14]
+            {
+                length++,
+                definition.Tag,
+                "Alpha屏幕滤镜",
+                NotesTypeID.Def.Invalid,
+                SlideType.Slide_INVALID,
+                4,
+                Ma2Category.MA2_Composition,
+                2,
+                2,
+                0,
+                0,
+                0,
+                0,
+                0
+            });
+        }
+        ChartFeatureGate.RegisterExtensions(list2.Select((object[] e) => (string)e[1]).Concat(AllNoteTypeNames));
+        System.Type type = value.GetValue(0).GetType();
+        ConstructorInfo constructorInfo = AccessTools.Constructor(type, new System.Type[14]
+        {
+            typeof(int),
+            typeof(string),
+            typeof(string),
+            typeof(NotesTypeID.Def),
+            typeof(SlideType),
+            typeof(int),
+            typeof(Ma2Category),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int),
             typeof(int)
-        ]);
-
-        Ma2FileRecordData = Array.CreateInstance(structType, targetArray.Length + newEntries.Count);
-        Array.Copy(targetArray, Ma2FileRecordData, targetArray.Length);
-
-        for (var i = 0; i < newEntries.Count; i++)
+        });
+        Ma2FileRecordData = Array.CreateInstance(type, value.Length + list2.Count);
+        Array.Copy(value, Ma2FileRecordData, value.Length);
+        for (int num = 0; num < list2.Count; num++)
         {
-            var j = targetArray.Length + i;
-            var obj = constructor.Invoke(newEntries[i]);
-            Ma2FileRecordData.SetValue(obj, j);
+            int index = value.Length + num;
+            object value2 = constructorInfo.Invoke(list2[num]);
+            Ma2FileRecordData.SetValue(value2, index);
         }
-
-        arrayTraverse.SetValue(Ma2FileRecordData);
+        traverse.SetValue(Ma2FileRecordData);
         TotalMa2RecordCount = Ma2FileRecordData.Length;
         LastMa2RecordID = TotalMa2RecordCount - 1;
+        BuildMa2RecordIds(type);
         MelonLogger.Msg($"[CustomNoteType] MA2 record data extended, total count: {TotalMa2RecordCount}");
-
-        // Initialize related classes ...
         SlideDataBuilder.InitializeHitAreasLookup();
         MelonLogger.Msg($"[CustomNoteType] HitAreasLookup initialized, total count: {SlideDataBuilder.HitAreasLookup.Count}");
-
+        WarmFieldRefs();
     }
 
     private static void LoadMineTextures()

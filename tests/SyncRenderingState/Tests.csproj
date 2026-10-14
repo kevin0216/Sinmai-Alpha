@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Sinmai-Alpha"><HintPath>../../bin/Release/net472/Sinmai-Alpha.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>../../Libs/UnityEngine.CoreModule.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

@@ -68,7 +68,7 @@ public partial class CustomNoteTypes
         }
     }
     private static List<(int Bar, int Grid, string Kind, string Text)> PendingPresentation => RuntimeCharts.Current.PendingPresentation;
-    private static readonly ConditionalWeakTable<NotesReader, PresentationTimeline> PresentationTimelines = new();
+    private static ConditionalWeakTable<NotesReader, PresentationTimeline> PresentationTimelines = new();
     private static readonly Dictionary<GameMonitor, ReferenceSideStatistics> PresentationPanels = new();
     private static readonly Dictionary<Camera, ChartShakeCamera> PresentationCameras = new();
     private static readonly Dictionary<Camera, ChartFrameMotion> PresentationMotionCameras = new();
@@ -118,31 +118,56 @@ public partial class CustomNoteTypes
 
     private static void ApplySharedOuterCover(GameObject owner, int monitor, float? alpha, PresentationCommands.Track brightness = null)
     {
-        if (owner == null) return;
-        foreach (var source in owner.GetComponentsInChildren<SpriteRenderer>(true))
+        if (owner == null)
         {
-            // The installed 1.70 aperture is a 2160x1920 tiled sprite. Split
-            // its repeating geometry so its native material/stencil still runs.
-            // Each half follows one monitor; an unbound side keeps native tint.
-            if (PresentationCoverCopies.Contains(source) || source.drawMode != SpriteDrawMode.Tiled || source.sprite == null) continue;
-            if (!PresentationSharedCovers.TryGetValue(source, out var lease))
+            return;
+        }
+        // The List overload walks the same hierarchy in the same order as the array overload, and the snapshot
+        // is still complete before the loop creates the ChartOuterCover children. Cleared afterwards so it does
+        // not keep renderers alive.
+        List<SpriteRenderer> sharedCoverBuffer = SharedCoverBuffer;
+        sharedCoverBuffer.Clear();
+        owner.GetComponentsInChildren(includeInactive: true, sharedCoverBuffer);
+        try
+        {
+            for (int i = 0; i < sharedCoverBuffer.Count; i++)
             {
-                lease = new SharedTiledCover { Source = source, Enabled = source.enabled };
-                for (var side = 0; side < 2; side++)
+                SpriteRenderer spriteRenderer = sharedCoverBuffer[i];
+                if (PresentationCoverCopies.Contains(spriteRenderer) || spriteRenderer.drawMode != SpriteDrawMode.Tiled || spriteRenderer.sprite == null)
                 {
-                    var go = new GameObject("ChartOuterCover" + side, typeof(SpriteRenderer));
-                    go.layer = source.gameObject.layer;
-                    // Siblings also work when the native cover object was
-                    // inactive. Generated renderers are excluded from scans.
-                    go.transform.SetParent(source.transform.parent, false);
-                    lease.Sides[side] = go.GetComponent<SpriteRenderer>();
-                    PresentationCoverCopies.Add(lease.Sides[side]);
+                    continue;
                 }
-                PresentationSharedCovers[source] = lease;
+                if (!PresentationSharedCovers.TryGetValue(spriteRenderer, out var value))
+                {
+                    value = new SharedTiledCover
+                    {
+                        Source = spriteRenderer,
+                        Enabled = spriteRenderer.enabled
+                    };
+                    for (int j = 0; j < 2; j++)
+                    {
+                        GameObject gameObject = new GameObject("ChartOuterCover" + j, typeof(SpriteRenderer));
+                        gameObject.layer = spriteRenderer.gameObject.layer;
+                        gameObject.transform.SetParent(spriteRenderer.transform.parent, worldPositionStays: false);
+                        value.Sides[j] = gameObject.GetComponent<SpriteRenderer>();
+                        PresentationCoverCopies.Add(value.Sides[j]);
+                    }
+                    PresentationSharedCovers[spriteRenderer] = value;
+                }
+                if (brightness != null)
+                {
+                    value.Brightness[monitor] = brightness;
+                }
+                if (alpha.HasValue)
+                {
+                    value.Alpha[monitor] = alpha.Value;
+                }
+                value.Apply();
             }
-            if (brightness != null) lease.Brightness[monitor] = brightness;
-            if (alpha.HasValue) lease.Alpha[monitor] = alpha.Value;
-            lease.Apply();
+        }
+        finally
+        {
+            sharedCoverBuffer.Clear();
         }
     }
 
@@ -222,79 +247,181 @@ public partial class CustomNoteTypes
         if (GuiSizes.SinglePlayer && __instance.MonitorIndex != 0)
         {
             ReleaseNoisePresentation(__instance);
-            foreach (var motion in PresentationMotionCameras.Values) if (motion != null) motion.Unbind(__instance);
+            foreach (ChartFrameMotion value8 in PresentationMotionCameras.Values)
+            {
+                if (value8 != null)
+                {
+                    value8.Unbind(__instance);
+                }
+            }
             ReleaseJudgeTextPresentation(__instance);
-            foreach (var effect in PresentationCameras.Values) if (effect != null) effect.Unbind(__instance);
-            return;
+            {
+                foreach (ChartShakeCamera value9 in PresentationCameras.Values)
+                {
+                    if (value9 != null)
+                    {
+                        value9.Unbind(__instance);
+                    }
+                }
+                return;
+            }
         }
-        var reader = NotesManager.Instance(__instance.MonitorIndex).getReader();
+        NotesReader reader = NotesManager.Instance(__instance.MonitorIndex).getReader();
         ApplyJudgeTextPresentation(__instance, reader);
-        var ctrl = Traverse.Create(__instance).Field("GameController").GetValue<GameCtrl>();
-        var main = Traverse.Create(__instance).Field("Main").GetValue<CanvasGroup>();
-        if (main == null || ctrl == null) return;
-        var noise = ApplyNoisePresentation(__instance, reader, ctrl);
-        if (!PresentationTimelines.TryGetValue(reader, out var timeline)) timeline = EmptyNoisePresentation;
-        if (timeline.Tracks.Count == 0 && noise == null)
+        GameCtrl value = ControllerOf(__instance);
+        CanvasGroup value2 = MainOf(__instance);
+        if (value2 == null || value == null)
         {
-            foreach (var motion in PresentationMotionCameras.Values) if (motion != null) motion.Unbind(__instance);
-            foreach (var effect in PresentationCameras.Values) if (effect != null) effect.Unbind(__instance);
             return;
         }
-        var now = NotesManager.GetCurrentMsec();
-        timeline.Tracks.TryGetValue("shake", out var shake);
-        timeline.Tracks.TryGetValue("flash", out var flash);
-        timeline.Tracks.TryGetValue("tint", out var tint);
-        // Frame compositing must precede SHAKE/FLASH/TINT regardless of the
-        // order in which Unity created the two components.
-        var movingFrame = timeline.Tracks.ContainsKey("move") || timeline.Tracks.ContainsKey("rotate") || timeline.Tracks.ContainsKey("zoom");
-        if (noise != null || shake != null || flash != null || tint != null || movingFrame || ChartScreenEffects.HasTracks(timeline.Tracks))
+        NoiseRenderState noiseRenderState = ApplyNoisePresentation(__instance, reader, value);
+        if (!PresentationTimelines.TryGetValue(reader, out var value3))
         {
-            var canvas = main.GetComponentInParent<Canvas>();
-            var adjustedCamera = ScreenPositionAdjust.GameRenderCamera;
-            var camera = adjustedCamera != null ? adjustedCamera : canvas != null ? canvas.worldCamera : null;
-            if (camera == null) camera = Camera.main;
-            if (camera == null) return;
-            if (!PresentationCameras.TryGetValue(camera, out var effect))
-            { effect = camera.gameObject.AddComponent<ChartShakeCamera>(); PresentationCameras[camera] = effect; }
-            // Main is the 1080x1080 note circle; its parent canvas is the full
-            // 1080x1920 frame. HideSubMonitor zooms the camera into Main. The
-            // screen-position mod renders the full scene to its own texture.
-            var mainOnly = GuiSizes.SinglePlayer && SinglePlayer.HideSubMonitor && adjustedCamera == null;
-            var bounds = !mainOnly && canvas != null ? canvas.transform : main.transform;
-            foreach (var other in PresentationCameras) if (other.Key != camera && other.Value != null) other.Value.Unbind(__instance);
-            effect.Bind(__instance, bounds as RectTransform, shake, flash, tint, timeline.Tracks, reader);
-            effect.BindNoise(__instance, noise, main.transform as RectTransform);
+            value3 = EmptyNoisePresentation;
         }
-        else foreach (var effect in PresentationCameras.Values) if (effect != null) effect.Unbind(__instance);
-        ApplyFrameMotion(__instance, reader, ctrl, main, timeline, noise);
+        if (value3.Tracks.Count == 0 && noiseRenderState == null)
+        {
+            foreach (ChartFrameMotion value10 in PresentationMotionCameras.Values)
+            {
+                if (value10 != null)
+                {
+                    value10.Unbind(__instance);
+                }
+            }
+            {
+                foreach (ChartShakeCamera value11 in PresentationCameras.Values)
+                {
+                    if (value11 != null)
+                    {
+                        value11.Unbind(__instance);
+                    }
+                }
+                return;
+            }
+        }
+        NotesManager.GetCurrentMsec();
+        value3.Tracks.TryGetValue("shake", out var value4);
+        value3.Tracks.TryGetValue("flash", out var value5);
+        value3.Tracks.TryGetValue("tint", out var value6);
+        bool flag = value3.Tracks.ContainsKey("move") || value3.Tracks.ContainsKey("rotate") || value3.Tracks.ContainsKey("zoom");
+        if (((noiseRenderState != null || value4 != null || value5 != null || value6 != null) | flag) || ChartScreenEffects.HasTracks(value3.Tracks))
+        {
+            Canvas componentInParent = value2.GetComponentInParent<Canvas>();
+            Camera gameRenderCamera = ScreenPositionAdjust.GameRenderCamera;
+            Camera camera;
+            if (gameRenderCamera != null)
+            {
+                camera = gameRenderCamera;
+            }
+            else
+            {
+                camera = ((componentInParent != null) ? componentInParent.worldCamera : null);
+            }
+            if (camera == null)
+            {
+                camera = Camera.main;
+            }
+            if (camera == null)
+            {
+                return;
+            }
+            if (!PresentationCameras.TryGetValue(camera, out var value7))
+            {
+                value7 = camera.gameObject.AddComponent<ChartShakeCamera>();
+                PresentationCameras[camera] = value7;
+            }
+            Transform transform = (((!GuiSizes.SinglePlayer || !SinglePlayer.HideSubMonitor || !(gameRenderCamera == null)) && componentInParent != null) ? componentInParent.transform : value2.transform);
+            foreach (KeyValuePair<Camera, ChartShakeCamera> presentationCamera in PresentationCameras)
+            {
+                if (presentationCamera.Key != camera && presentationCamera.Value != null)
+                {
+                    presentationCamera.Value.Unbind(__instance);
+                }
+            }
+            value7.Bind(__instance, transform as RectTransform, value4, value5, value6, value3.Tracks, reader);
+            value7.BindNoise(__instance, noiseRenderState, value2.transform as RectTransform);
+        }
+        else
+        {
+            foreach (ChartShakeCamera value12 in PresentationCameras.Values)
+            {
+                if (value12 != null)
+                {
+                    value12.Unbind(__instance);
+                }
+            }
+        }
+        ApplyFrameMotion(__instance, reader, value, value2, value3, noiseRenderState);
     }
     private static void ApplyFrameMotion(GameMonitor owner, NotesReader reader, GameCtrl controller, CanvasGroup main, PresentationTimeline timeline, NoiseRenderState noise)
     {
-        timeline.Tracks.TryGetValue("move", out var move); timeline.Tracks.TryGetValue("rotate", out var rotate); timeline.Tracks.TryGetValue("zoom", out var zoom);
-        if (move == null && rotate == null && zoom == null && noise == null)
-        { foreach (var motion in PresentationMotionCameras.Values) if (motion != null) motion.Unbind(owner); return; }
-        var canvas = main.GetComponentInParent<Canvas>();
-        var adjusted = ScreenPositionAdjust.GameRenderCamera;
-        var camera = adjusted != null ? adjusted : canvas != null ? canvas.worldCamera : null;
-        if (camera == null) camera = Camera.main;
-        if (camera == null) return;
-        var bounds = GuiSizes.SinglePlayer && SinglePlayer.HideSubMonitor && adjusted == null || canvas == null ? main.transform : canvas.transform;
-        if (!PresentationMotionCameras.TryGetValue(camera, out var effect))
-        { effect = camera.gameObject.AddComponent<ChartFrameMotion>(); PresentationMotionCameras[camera] = effect; }
-        foreach (var other in PresentationMotionCameras) if (other.Key != camera && other.Value != null) other.Value.Unbind(owner);
+        timeline.Tracks.TryGetValue("move", out var value);
+        timeline.Tracks.TryGetValue("rotate", out var value2);
+        timeline.Tracks.TryGetValue("zoom", out var value3);
+        if (value == null && value2 == null && value3 == null && noise == null)
+        {
+            foreach (ChartFrameMotion value5 in PresentationMotionCameras.Values)
+            {
+                if (value5 != null)
+                {
+                    value5.Unbind(owner);
+                }
+            }
+            return;
+        }
+        Canvas componentInParent = main.GetComponentInParent<Canvas>();
+        Camera gameRenderCamera = ScreenPositionAdjust.GameRenderCamera;
+        Camera camera;
+        if (gameRenderCamera != null)
+        {
+            camera = gameRenderCamera;
+        }
+        else
+        {
+            camera = ((componentInParent != null) ? componentInParent.worldCamera : null);
+        }
+        if (camera == null)
+        {
+            camera = Camera.main;
+        }
+        if (camera == null)
+        {
+            return;
+        }
+        Transform transform = (((GuiSizes.SinglePlayer && SinglePlayer.HideSubMonitor && gameRenderCamera == null) || componentInParent == null) ? main.transform : componentInParent.transform);
+        if (!PresentationMotionCameras.TryGetValue(camera, out var value4))
+        {
+            value4 = camera.gameObject.AddComponent<ChartFrameMotion>();
+            PresentationMotionCameras[camera] = value4;
+        }
+        foreach (KeyValuePair<Camera, ChartFrameMotion> presentationMotionCamera in PresentationMotionCameras)
+        {
+            if (presentationMotionCamera.Key != camera && presentationMotionCamera.Value != null)
+            {
+                presentationMotionCamera.Value.Unbind(owner);
+            }
+        }
         MotionCovers.Clear();
-        if (move != null || rotate != null || zoom != null)
+        if (value != null || value2 != null || value3 != null)
         {
             ApplySharedOuterCover(GameObject.Find("Mask"), owner.MonitorIndex, null);
-            foreach (var cover in PresentationSharedCovers.Values)
-                if (owner.MonitorIndex >= 0 && owner.MonitorIndex < cover.Sides.Length && cover.Sides[owner.MonitorIndex] != null) MotionCovers.Add(cover.Sides[owner.MonitorIndex].transform);
-            var background = BackgroundFor(owner, main);
-            var bg = background != null ? Traverse.Create(background).Field("_bgObject").GetValue<GameObject>() : null;
-            var mask = bg != null ? bg.transform.Find("BG/Monitor_Mask") : null;
-            if (mask != null) MotionCovers.Add(mask);
+            foreach (SharedTiledCover value6 in PresentationSharedCovers.Values)
+            {
+                if (owner.MonitorIndex >= 0 && owner.MonitorIndex < value6.Sides.Length && value6.Sides[owner.MonitorIndex] != null)
+                {
+                    MotionCovers.Add(value6.Sides[owner.MonitorIndex].transform);
+                }
+            }
+            MonitorBackgroundTownController monitorBackgroundTownController = BackgroundFor(owner, main);
+            GameObject gameObject = ((monitorBackgroundTownController != null) ? ChartFrameMotion.NativeBackgroundObject(monitorBackgroundTownController) : null);
+            Transform transform2 = ((gameObject != null) ? gameObject.transform.Find("BG/Monitor_Mask") : null);
+            if (transform2 != null)
+            {
+                MotionCovers.Add(transform2);
+            }
         }
-        effect.Bind(owner, reader, controller, main.transform as RectTransform, bounds as RectTransform, move, rotate, zoom, MotionCovers);
-        effect.BindNoise(owner, noise);
+        value4.Bind(owner, reader, controller, main.transform as RectTransform, transform as RectTransform, value, value2, value3, MotionCovers);
+        value4.BindNoise(owner, noise);
     }
     public static void ReleaseChartPresentation()
     {
@@ -370,6 +497,9 @@ public partial class CustomNoteTypes
     {
         [HarmonyPostfix] public static void Postfix() => ReleaseChartPresentation();
     }
+
+
+    private static readonly List<SpriteRenderer> SharedCoverBuffer = new List<SpriteRenderer>();
 }
 
 // Image-space UV offset leaves logical sensors, native input queues and timing untouched.
@@ -474,123 +604,311 @@ public sealed class ChartShakeCamera : MonoBehaviour
         => new(rect.X * width, (1 - rect.Top) * height, rect.Width * width, rect.Height * height);
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
-        var previous = RenderTexture.active;
-        var matrixPushed = false;
-        RenderTexture isolated = null;
-        RenderTexture screenFrame = null;
-        var finalDestination = destination;
+        RenderTexture active = RenderTexture.active;
+        bool flag = false;
+        RenderTexture renderTexture = null;
+        RenderTexture renderTexture2 = null;
+        RenderTexture renderTexture4 = null;
+        RenderTexture renderTexture5 = null;
+        RenderTexture dest = destination;
         try
         {
-            // Unity supplies null for the last image effect targeting the
-            // screen. Preserve a readable filtered frame for the later noise
-            // pass instead of trying to sample the screen as a texture.
-            if (destination == null && frames.Values.Any(frame => frame.Noise != null && frame.Noise.Ready))
+            if (destination == null && AnyNoiseReady())
             {
-                screenFrame = RenderTexture.GetTemporary(source.width, source.height, 0, source.format, RenderTextureReadWrite.Linear);
-                destination = screenFrame;
+                bool draws = true;
+                try
+                {
+                    draws = DrawsAny(GetComponent<Camera>(), NotesManager.GetCurrentMsec());
+                }
+                catch (Exception)
+                {
+                    // A failed prediction keeps the original rt2 path, including its base blit.
+                }
+                if (draws)
+                {
+                    renderTexture2 = RenderTexture.GetTemporary(source.width, source.height, 0, source.format, RenderTextureReadWrite.Linear);
+                    destination = renderTexture2;
+                }
+                else
+                {
+                    // Nothing draws: source -> rt2 -> backbuffer would be two texel copies of source, so blit it
+                    // straight to the backbuffer below. Hold (unused) a temporary with rt2's descriptor for the frame,
+                    // as a drawing frame does, so the pool does not destroy rt2 after 15 idle frames and the next
+                    // effect or zone frame does not re-create it. Released with rt2's.
+                    renderTexture5 = RenderTexture.GetTemporary(source.width, source.height, 0, source.format, RenderTextureReadWrite.Linear);
+                }
             }
-            var motion = GetComponent<ChartFrameMotion>();
-            if (motion != null && motion.HasIsolatedFrames)
+            ChartFrameMotion component = GetComponent<ChartFrameMotion>();
+            if (component != null && component.HasIsolatedFrames)
             {
-                isolated = RenderTexture.GetTemporary(source.width, source.height, 0, source.format);
-                motion.CompositeIsolation(source, isolated); source = isolated;
+                renderTexture = RenderTexture.GetTemporary(source.width, source.height, 0, source.format);
+                component.CompositeIsolation(source, renderTexture);
+                source = renderTexture;
+            }
+            else if (component != null && component.KeepsIsolationTexturesPooled)
+            {
+                // Between motion segments: hold (unused) a temporary with the composite's descriptor for this frame,
+                // as a motion frame does, so the pool does not destroy it after 15 idle frames and the next onset
+                // does not re-create it (see ChartFrameMotion.KeepIsolationTexturesPooled). Released below.
+                renderTexture4 = RenderTexture.GetTemporary(source.width, source.height, 0, source.format);
             }
             Graphics.Blit(source, destination);
-            var camera = GetComponent<Camera>();
-            if (camera == null) return;
-            var milliseconds = NotesManager.GetCurrentMsec();
-            foreach (var pair in frames)
+            Camera component2 = GetComponent<Camera>();
+            if (component2 == null)
             {
-                var frame = pair.Value;
-                if (pair.Key == null || frame.Bounds == null || !frame.Bounds.gameObject.activeInHierarchy) continue;
-                if (frame.ScreenEffects != null)
+                return;
+            }
+            float currentMsec = NotesManager.GetCurrentMsec();
+            foreach (KeyValuePair<GameMonitor, Frame> frame2 in frames)
+            {
+                Frame value = frame2.Value;
+                if (frame2.Key == null || value.Bounds == null || !value.Bounds.gameObject.activeInHierarchy)
                 {
-                    var shaderBounds = Bounds(frame, camera);
-                    var shaderVisible = shaderBounds.Intersect(new PresentationRect(0, 0, 1, 1));
-                    var shaderField = frame.Playfield != null ? Bounds(frame.Playfield, frame.Corners, camera) : shaderBounds;
-                    if (frame.ScreenEffects.TryDraw(source, destination, shaderBounds, shaderVisible, shaderField, milliseconds)) continue;
+                    continue;
                 }
-                PresentationChange ev = null, tintSource = null;
-                var strength = frame.Track?.Evaluate(milliseconds, out ev) ?? 0;
-                var shaking = ev != null && Math.Abs(strength) > .0001f;
-                var flash = Math.Max(-1, Math.Min(1, frame.Flash?.Evaluate(milliseconds) ?? 0));
-                var tint = Math.Max(0, Math.Min(1, frame.Tint?.Evaluate(milliseconds, out tintSource) ?? 0));
-                if (tintSource == null || string.IsNullOrEmpty(tintSource.ColorHex)) tint = 0;
-                if (!shaking && Math.Abs(flash) <= .001f && tint <= .001f) continue;
-                var bounds = Bounds(frame, camera);
-                if (!bounds.HasArea) continue;
-                var visible = bounds.Intersect(new PresentationRect(0, 0, 1, 1));
-                if (!visible.HasArea) continue;
-                var x = 0f; var y = 0f;
-                if (shaking)
+                if (value.ScreenEffects != null)
                 {
-                    var phase = milliseconds * .001f * (ev.Frequency > 0 ? ev.Frequency : 18);
-                    x = (Mathf.PerlinNoise(phase, .37f) - .5f) * 2 * strength * .05f;
-                    y = ev.HasDirection ? Mathf.Sin(ev.Direction) * x : (Mathf.PerlinNoise(.71f, phase) - .5f) * 2 * strength * .05f;
-                    if (ev.HasDirection) x *= Mathf.Cos(ev.Direction);
-                }
-                if (!matrixPushed)
-                {
-                    Graphics.SetRenderTarget(destination); GL.PushMatrix(); matrixPushed = true;
-                    GL.LoadPixelMatrix(0, source.width, source.height, 0);
-                }
-                var output = visible;
-                if (shaking)
-                {
-                    Graphics.DrawTexture(Pixels(visible, source.width, source.height), Texture2D.blackTexture);
-                    if (!PresentationViewportMath.Shift(bounds, x, y, out output, out var input)) continue;
-                    Graphics.DrawTexture(Pixels(output, source.width, source.height), source,
-                        new Rect(input.X, input.Y, input.Width, input.Height), 0, 0, 0, 0);
-                }
-                // Same order as AlphaScreenEffects: flash/fade, then tint,
-                // then the inside-frame mask (already represented by output).
-                if (flash != 0) DrawColor(output, source, new Color(flash > 0 ? 1 : 0, flash > 0 ? 1 : 0, flash > 0 ? 1 : 0, Math.Abs(flash)));
-                if (tint > 0)
-                {
-                    if (frame.TintSource != tintSource)
+                    PresentationRect presentationRect = Bounds(value, component2);
+                    PresentationRect visible = presentationRect.Intersect(new PresentationRect(0f, 0f, 1f, 1f));
+                    PresentationRect playfield = ((value.Playfield != null) ? Bounds(value.Playfield, value.Corners, component2) : presentationRect);
+                    if (value.ScreenEffects.TryDraw(source, destination, presentationRect, visible, playfield, currentMsec))
                     {
-                        var rgb = int.Parse(tintSource.ColorHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-                        frame.TintColor = new Color(((rgb >> 16) & 255) / 255f, ((rgb >> 8) & 255) / 255f, (rgb & 255) / 255f);
-                        frame.TintSource = tintSource;
+                        continue;
                     }
-                    var color = frame.TintColor; color.a = tint; DrawColor(output, source, color);
                 }
-            }
-            // Latest compiled reference uses filter pass 600, noise pass 601.
-            // Keep Trail history raw and composite noise after every filter.
-            if (matrixPushed) { GL.PopMatrix(); matrixPushed = false; }
-            RenderTexture noiseSource = null;
-            try
-            {
-                foreach (var pair in frames)
+                PresentationChange source2 = null;
+                PresentationChange source3 = null;
+                float num = value.Track?.Evaluate(currentMsec, out source2) ?? 0f;
+                bool flag2 = source2 != null && Math.Abs(num) > 0.0001f;
+                float num2 = Math.Max(-1f, Math.Min(1f, value.Flash?.Evaluate(currentMsec) ?? 0f));
+                float num3 = Math.Max(0f, Math.Min(1f, value.Tint?.Evaluate(currentMsec, out source3) ?? 0f));
+                if (source3 == null || string.IsNullOrEmpty(source3.ColorHex))
                 {
-                    var frame = pair.Value;
-                    if (pair.Key == null || frame.Noise == null || frame.Playfield == null || frame.Bounds == null || !frame.Bounds.gameObject.activeInHierarchy) continue;
-                    var bounds = Bounds(frame, camera);
-                    var visible = bounds.Intersect(new PresentationRect(0, 0, 1, 1));
-                    if (!bounds.HasArea || !visible.HasArea) continue;
-                    if (noiseSource == null) noiseSource = RenderTexture.GetTemporary(source.width, source.height, 0, source.format, RenderTextureReadWrite.Linear);
-                    Graphics.Blit(destination, noiseSource);
-                    var playfield = Bounds(frame.Playfield, frame.Corners, camera);
-                    frame.Noise.TryDraw(noiseSource, destination, camera, bounds, visible, playfield);
+                    num3 = 0f;
+                }
+                if (!flag2 && Math.Abs(num2) <= 0.001f && num3 <= 0.001f)
+                {
+                    continue;
+                }
+                PresentationRect frame = Bounds(value, component2);
+                if (!frame.HasArea)
+                {
+                    continue;
+                }
+                PresentationRect presentationRect2 = frame.Intersect(new PresentationRect(0f, 0f, 1f, 1f));
+                if (!presentationRect2.HasArea)
+                {
+                    continue;
+                }
+                float num4 = 0f;
+                float y = 0f;
+                if (flag2)
+                {
+                    float num5 = currentMsec * 0.001f * ((source2.Frequency > 0f) ? source2.Frequency : 18f);
+                    num4 = (Mathf.PerlinNoise(num5, 0.37f) - 0.5f) * 2f * num * 0.05f;
+                    y = (source2.HasDirection ? (Mathf.Sin(source2.Direction) * num4) : ((Mathf.PerlinNoise(0.71f, num5) - 0.5f) * 2f * num * 0.05f));
+                    if (source2.HasDirection)
+                    {
+                        num4 *= Mathf.Cos(source2.Direction);
+                    }
+                }
+                if (!flag)
+                {
+                    Graphics.SetRenderTarget(destination);
+                    GL.PushMatrix();
+                    flag = true;
+                    GL.LoadPixelMatrix(0f, source.width, source.height, 0f);
+                }
+                PresentationRect destination2 = presentationRect2;
+                if (flag2)
+                {
+                    Graphics.DrawTexture(Pixels(presentationRect2, source.width, source.height), Texture2D.blackTexture);
+                    if (!PresentationViewportMath.Shift(frame, num4, y, out destination2, out var source4))
+                    {
+                        continue;
+                    }
+                    Graphics.DrawTexture(Pixels(destination2, source.width, source.height), source, new Rect(source4.X, source4.Y, source4.Width, source4.Height), 0, 0, 0, 0);
+                }
+                if (num2 != 0f)
+                {
+                    DrawColor(destination2, source, new Color((num2 > 0f) ? 1 : 0, (num2 > 0f) ? 1 : 0, (num2 > 0f) ? 1 : 0, Math.Abs(num2)));
+                }
+                if (num3 > 0f)
+                {
+                    if (value.TintSource != source3)
+                    {
+                        int num6 = int.Parse(source3.ColorHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                        value.TintColor = new Color((float)((num6 >> 16) & 0xFF) / 255f, (float)((num6 >> 8) & 0xFF) / 255f, (float)(num6 & 0xFF) / 255f);
+                        value.TintSource = source3;
+                    }
+                    Color tintColor = value.TintColor;
+                    tintColor.a = num3;
+                    DrawColor(destination2, source, tintColor);
                 }
             }
-            finally { if (noiseSource != null) RenderTexture.ReleaseTemporary(noiseSource); }
-        }
-        finally
-        {
-            if (matrixPushed) GL.PopMatrix();
+            if (flag)
+            {
+                GL.PopMatrix();
+                flag = false;
+            }
+            RenderTexture renderTexture3 = null;
+            bool flag3 = false;
             try
             {
-                if (screenFrame != null) Graphics.Blit(screenFrame, finalDestination);
+                foreach (KeyValuePair<GameMonitor, Frame> frame3 in frames)
+                {
+                    Frame value2 = frame3.Value;
+                    if (frame3.Key == null || value2.Noise == null || value2.Playfield == null || value2.Bounds == null || !value2.Bounds.gameObject.activeInHierarchy)
+                    {
+                        continue;
+                    }
+                    // TryDraw would return false at its first line without side effects (no zone visible, field
+                    // not captured, other camera), so skip the full-screen copy into renderTexture3 that only
+                    // feeds it. The Bounds calls skipped with it only fill this frame's scratch corners.
+                    if (!value2.Noise.CanDraw(component2))
+                    {
+                        flag3 |= value2.Noise.Ready;
+                        // Once per noise state, from the song-entry Init frame on: create the noise targets with
+                        // the size and format TryDraw would use (renderTexture3 has source's), instead of at the
+                        // first visible zone mid-song. Same Bounds/area tests as below.
+                        if (value2.Noise.NeedsTargets)
+                        {
+                            PresentationRect presentationRect3 = Bounds(value2, component2);
+                            if (presentationRect3.HasArea && presentationRect3.Intersect(new PresentationRect(0f, 0f, 1f, 1f)).HasArea)
+                            {
+                                value2.Noise.PrepareTargets(source, presentationRect3);
+                            }
+                        }
+                        continue;
+                    }
+                    PresentationRect bounds = Bounds(value2, component2);
+                    PresentationRect visible2 = bounds.Intersect(new PresentationRect(0f, 0f, 1f, 1f));
+                    // destination is never null here (CanDraw implies rt2 was taken); the test only keeps a
+                    // mispredicted frame from reading the backbuffer.
+                    if (bounds.HasArea && visible2.HasArea && destination != null)
+                    {
+                        // TryDraw reads its source only in its first draw (into its own input), before it binds
+                        // the destination, so rt2 can be both: the same texels as the full-screen copy into
+                        // renderTexture3 that fed it. A destination Unity passed in is still copied first.
+                        RenderTexture renderTexture6 = destination;
+                        if (destination != renderTexture2)
+                        {
+                            if (renderTexture3 == null)
+                            {
+                                renderTexture3 = RenderTexture.GetTemporary(source.width, source.height, 0, source.format, RenderTextureReadWrite.Linear);
+                            }
+                            Graphics.Blit(destination, renderTexture3);
+                            renderTexture6 = renderTexture3;
+                        }
+                        PresentationRect playfield2 = Bounds(value2.Playfield, value2.Corners, component2);
+                        value2.Noise.TryDraw(renderTexture6, destination, component2, bounds, visible2, playfield2);
+                    }
+                }
+                // Upstream took renderTexture3 on every frame of a noise chart; skipping it between zones let the
+                // pool destroy that second full-screen temporary (UnityPlayer RenderBufferManager::GarbageCollect(15)
+                // runs every frame and frees a temporary unused for more than 15 frames), so each zone onset
+                // re-created it. Taking and returning one with the same descriptor while renderTexture2 is still
+                // held keeps it pooled, as upstream did, without the copy. Nothing is drawn into it. With rt2 (or its
+                // stand-in renderTexture5) the zones read rt2 itself, so renderTexture3 is not needed at all.
+                if (renderTexture3 == null && flag3 && renderTexture2 == null && renderTexture5 == null)
+                {
+                    RenderTexture.ReleaseTemporary(RenderTexture.GetTemporary(source.width, source.height, 0, source.format, RenderTextureReadWrite.Linear));
+                }
             }
             finally
             {
-                if (screenFrame != null) RenderTexture.ReleaseTemporary(screenFrame);
-                RenderTexture.active = previous;
-                if (isolated != null) RenderTexture.ReleaseTemporary(isolated);
+                if (renderTexture3 != null)
+                {
+                    RenderTexture.ReleaseTemporary(renderTexture3);
+                }
             }
         }
+        finally
+        {
+            if (flag)
+            {
+                GL.PopMatrix();
+            }
+            try
+            {
+                if (renderTexture2 != null)
+                {
+                    Graphics.Blit(renderTexture2, dest);
+                }
+            }
+            finally
+            {
+                if (renderTexture2 != null)
+                {
+                    RenderTexture.ReleaseTemporary(renderTexture2);
+                }
+                if (renderTexture5 != null)
+                {
+                    RenderTexture.ReleaseTemporary(renderTexture5);
+                }
+                RenderTexture.active = active;
+                if (renderTexture != null)
+                {
+                    RenderTexture.ReleaseTemporary(renderTexture);
+                }
+                if (renderTexture4 != null)
+                {
+                    RenderTexture.ReleaseTemporary(renderTexture4);
+                }
+            }
+        }
+    }
+
+
+    private bool AnyNoiseReady()
+    {
+        foreach (Frame value in frames.Values)
+        {
+            if (value.Noise != null && value.Noise.Ready)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool DrawsAny(Camera camera, float currentMsec)
+    {
+        if (camera == null)
+        {
+            return false;
+        }
+        foreach (KeyValuePair<GameMonitor, Frame> frame in frames)
+        {
+            Frame value = frame.Value;
+            if (frame.Key == null || value.Bounds == null || !value.Bounds.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+            if (value.ScreenEffects != null && value.ScreenEffects.WillDraw(currentMsec))
+            {
+                return true;
+            }
+            PresentationChange source = null;
+            PresentationChange source2 = null;
+            float num = value.Track?.Evaluate(currentMsec, out source) ?? 0f;
+            bool flag = source != null && Math.Abs(num) > 0.0001f;
+            float num2 = Math.Max(-1f, Math.Min(1f, value.Flash?.Evaluate(currentMsec) ?? 0f));
+            float num3 = Math.Max(0f, Math.Min(1f, value.Tint?.Evaluate(currentMsec, out source2) ?? 0f));
+            if (source2 == null || string.IsNullOrEmpty(source2.ColorHex))
+            {
+                num3 = 0f;
+            }
+            if (!(!flag && Math.Abs(num2) <= 0.001f && num3 <= 0.001f))
+            {
+                return true;
+            }
+            if (value.Noise != null && value.Playfield != null && value.Noise.CanDraw(camera))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }
 

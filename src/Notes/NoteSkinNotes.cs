@@ -34,7 +34,7 @@ public partial class CustomNoteTypes
             Applied = false;
         }
     }
-    private static readonly ConditionalWeakTable<NoteData, SkinNote> NoteSkins = new();
+    private static ConditionalWeakTable<NoteData, SkinNote> NoteSkins = new ConditionalWeakTable<NoteData, SkinNote>();
     private static ConditionalWeakTable<NotesReader, NoteSkinAssets> SkinReaders = new();
     private static readonly HashSet<NoteSkinAssets> SkinStores = new();
     private static readonly Dictionary<NoteBase, SkinLease> SkinOwners = new();
@@ -149,19 +149,32 @@ public partial class CustomNoteTypes
         // the original update. Frame-end skin swap precedes COLOR/SIZE overlays.
         foreach (var lease in SkinOwners.Values) if (lease.Monitor == __instance.MonitorIndex) lease.Restore();
     }
-    [HarmonyPostfix, HarmonyPriority(Priority.Last + 10), HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
+    [HarmonyPostfix]
+    [HarmonyPriority(10)]
+    [HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
     public static void AfterSkinFrame(GameCtrl __instance)
     {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-        foreach (var pair in SkinOwners.Where(p => p.Value.Monitor == __instance.MonitorIndex).ToArray())
+        if (!FeaturesEnabled(__instance))
         {
-            var owner = pair.Key; var lease = pair.Value;
-            if (owner == null || !owner.gameObject.activeInHierarchy || owner.IsEnd()) { lease.Restore(); SkinOwners.Remove(owner); continue; }
-            if (owner is StarNote && Traverse.Create(owner).Field("MultiSlide").GetValue<bool>()) continue;
-            var skin = lease.Note.Assets.Create(lease.Note.Path, lease.Model);
-            if (skin == null) continue;
-            lease.Original = lease.Render.sprite; lease.AppliedSprite = skin; lease.Applied = true; lease.Render.sprite = skin;
+            return;
+        }
+        int monitorIndex = __instance.MonitorIndex;
+        List<KeyValuePair<NoteBase, SkinLease>> list = SkinScratch;
+        list.Clear();
+        foreach (KeyValuePair<NoteBase, SkinLease> skinOwner in SkinOwners)
+        {
+            if (skinOwner.Value.Monitor == monitorIndex)
+            {
+                list.Add(skinOwner);
+            }
+        }
+        try
+        {
+            ApplySkinOwners(list);
+        }
+        finally
+        {
+            list.Clear();
         }
     }
     [HarmonyPrefix, HarmonyPatch(typeof(GameCtrl), "ForceNoteCollect")]
@@ -171,5 +184,32 @@ public partial class CustomNoteTypes
         { pair.Value.Restore(); SkinOwners.Remove(pair.Key); }
         // Keep decoded assets for practice rewind; release happens on chart
         // reload/game release, after all dependent renderers have been restored.
+    }
+
+
+    private static void ApplySkinOwners(List<KeyValuePair<NoteBase, SkinLease>> array)
+    {
+        for (int num = 0; num < array.Count; num++)
+        {
+            KeyValuePair<NoteBase, SkinLease> keyValuePair = array[num];
+            NoteBase key = keyValuePair.Key;
+            SkinLease value = keyValuePair.Value;
+            if (key == null || !key.gameObject.activeInHierarchy || key.IsEnd())
+            {
+                value.Restore();
+                SkinOwners.Remove(key);
+            }
+            else if (!(key is StarNote starNote) || !((NoteRefs.StarMultiSlide != null) ? NoteRefs.StarMultiSlide(starNote) : Traverse.Create(key).Field("MultiSlide").GetValue<bool>()))
+            {
+                Sprite sprite = value.Note.Assets.Create(value.Note.Path, value.Model);
+                if (!(sprite == null))
+                {
+                    value.Original = value.Render.sprite;
+                    value.AppliedSprite = sprite;
+                    value.Applied = true;
+                    value.Render.sprite = sprite;
+                }
+            }
+        }
     }
 }

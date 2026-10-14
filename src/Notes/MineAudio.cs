@@ -123,13 +123,33 @@ internal static class MineAudio
 
     internal static void Flush()
     {
-        var ctrl = Singleton<SoundCtrl>.Instance;
-        foreach (var setting in pending.Values)
+        if (pending.Count == 0)
         {
-            ctrl.Stop(setting.PlayerID);
-            ctrl.Play(setting);
+            return;
         }
+        // Snapshot and clear first, and contain each failure: Flush runs from the SoundManager.PlayExecute
+        // postfix inside GameMain.LateUpdate, where an exception (e.g. from another mod's SoundCtrl.Play
+        // prefix) would otherwise repeat every frame and make the game quit.
+        SoundCtrl.PlaySetting[] array = new SoundCtrl.PlaySetting[pending.Count];
+        pending.Values.CopyTo(array, 0);
         pending.Clear();
+        SoundCtrl instance = Singleton<SoundCtrl>.Instance;
+        foreach (SoundCtrl.PlaySetting value in array)
+        {
+            try
+            {
+                instance.Stop(value.PlayerID);
+                instance.Play(value);
+            }
+            catch (Exception ex)
+            {
+                if (!flushFailureLogged)
+                {
+                    flushFailureLogged = true;
+                    SinmaiAlpha.Compatibility.SafeLog.Warning("[Sinmai-Alpha] Mine sound on player " + value.PlayerID + " failed (further failures are not logged): " + ex);
+                }
+            }
+        }
     }
 
     internal static void Clear() => pending.Clear();
@@ -146,6 +166,9 @@ internal static class MineAudio
         rotations[monitor] = 0;
         Cues.Initialize(monitor);
     }
+
+
+    private static bool flushFailureLogged;
 }
 
 public partial class CustomNoteTypes

@@ -1,5 +1,4 @@
-﻿using System.Collections.Generic;
-using System.Runtime.CompilerServices;
+using System.Collections.Generic;
 using HarmonyLib;
 using Monitor;
 using UnityEngine;
@@ -13,14 +12,21 @@ public partial class CustomNoteTypes
         public int Index;
     }
 
-    private static readonly ConditionalWeakTable<TouchReserve, TouchReserveMonitor> TouchReserveMonitors = new();
+    private static readonly Dictionary<TouchReserve, TouchReserveMonitor> TouchReserveMonitors = new Dictionary<TouchReserve, TouchReserveMonitor>();
 
     [HarmonyPatch(typeof(TouchReserve), "Initialize")]
     public static class TouchReserveMonitorPatch
     {
         [HarmonyPrefix]
         public static void Prefix(TouchReserve __instance, int monitorIndex)
-            => TouchReserveMonitors.GetOrCreateValue(__instance).Index = monitorIndex;
+        {
+            if (!TouchReserveMonitors.TryGetValue(__instance, out var value))
+            {
+                PruneDeadTouchReserves();
+                value = (TouchReserveMonitors[__instance] = new TouchReserveMonitor());
+            }
+            value.Index = monitorIndex;
+        }
     }
 
     [HarmonyPatch(typeof(TouchReserve), "DispUpdate")]

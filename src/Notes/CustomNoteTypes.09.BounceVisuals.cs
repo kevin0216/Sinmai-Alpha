@@ -1,20 +1,9 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
 using MAI2.Util;
 using Manager;
-using MelonLoader;
 using Monitor;
-using Monitor.Game;
-using Process;
 using UnityEngine;
-using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
 
@@ -31,103 +20,84 @@ public partial class CustomNoteTypes
     /// 判定后：外框位移归零（原版），恢复可见。</summary>
     public static void BounceNoteVisualPostfix(NoteBase __instance, ref float __result)
     {
-        if (BounceSegmentsByType.Count == 0 || __instance == null) return;
-        // TouchHoldC 用基类 GetNoteYPosition，但 bounce 只适配 Tap/Star/Hold/Break
-        // （Majdata 的 BOUNCE 类型不含 touch）；TouchNoteB 有自己的位置公式，天然排除。
-        if (__instance is TouchHoldC) return;
-        if (__instance is HoldNote || __instance is BreakHoldNote) return;
+        if (BounceSegmentsByType.Count == 0 || __instance == null || __instance is TouchHoldC || __instance is HoldNote || __instance is BreakHoldNote)
+        {
+            return;
+        }
         try
         {
-            var tr = Traverse.Create(__instance);
-            var appear = tr.Field("AppearMsec").GetValue<float>();
-            float bounce;
-            if (!BounceDurationByNoteIndex.TryGetValue(tr.Field("NoteIndex").GetValue<int>(), out bounce) || bounce <= 0f)
+            // Typed field reads in place of a Traverse plus a Field chain per read. NoteIndex is read once: the
+            // reads have no side effects and nothing in between can change it.
+            float value = TraverseRead(NoteRefs.AppearMsec, __instance, "AppearMsec");
+            int noteIndex = NoteIndexOf(__instance);
+            if (!BounceDurationByNoteIndex.TryGetValue(noteIndex, out var value2) || value2 <= 0f)
             {
-                // fallback：直接查段表（字典可能因加载顺序未构建——GetNoteList 在 loadMa2Main 后置可能为空）。
-                string fallbackType;
-                if (!BounceTypeByNoteIndex.TryGetValue(tr.Field("NoteIndex").GetValue<int>(), out fallbackType))
-                    return;
-                bounce = GetBounceDurationAt(appear, fallbackType);
-                if (bounce <= 0f) return;
-            }
-
-            var now = NotesManager.GetCurrentMsec();
-            var judgeOffset = now - appear;
-            var bMs = bounce * 1000f;
-
-            if (judgeOffset < -bMs)
-            {
-                // 弹跳窗口前：音符本体 + 光效 + 外框全部隐藏——note 弹出前外框不可见，
-                // 避免外框从中间快速放大移动到判定线的视觉（scale 预过渡也取消）。
-                SetBounceAlpha(tr, 0f);
-                SetBounceChildrenActive(tr, false);
-                SetBounceGuideActive(tr, false);
-                return;
-            }
-
-            if (judgeOffset < 0f)
-            {
-                // 弹跳窗口内：抛物线位置（出生半径→判定线→出生半径；SPAWN 联动）。
-                // 弹跳轨迹以【原版判定线位置】为起终点（含音符速度常量偏移 V_9），
-                // 否则外框在接近判定线时残留 -V_9 偏移、弧圈拼不齐。
-                // 出生半径 R 由 SPAWN 曲线给出（默认 1.225）；y 仍按标准映射
-                // t=(distance−1.225)/3.575，与停驻位置（v5=(R−1.225)/3.575）无缝衔接。
-                var bounceIndex = tr.Field("NoteIndex").GetValue<int>();
-                var spawnR = BounceSpawnRadius;
-                if (!SpawnRadiusByNoteIndex.TryGetValue(bounceIndex, out spawnR))
+                if (!BounceTypeByNoteIndex.TryGetValue(noteIndex, out var value3))
                 {
-                    string fallbackType;
-                    if (BounceTypeByNoteIndex.TryGetValue(bounceIndex, out fallbackType))
-                        spawnR = GetSpawnRadiusAt(appear, fallbackType);
+                    return;
                 }
-
-                var elapsed = Mathf.Clamp(judgeOffset + bMs, 0f, bMs);                var half = bMs * 0.5f;
-                var destroyR = RingValuesByNoteIndex.TryGetValue(bounceIndex, out var ringValue) ? ringValue.Destroy : BounceJudgeLine;
-                var accel = 8f * (destroyR - spawnR) / (bMs * bMs);
-                var fromApex = elapsed - half;
-                var distance = spawnR + 0.5f * accel * fromApex * fromApex;
-                var t = (distance - BounceSpawnRadius) / (BounceJudgeLine - BounceSpawnRadius);
-                var startPos = tr.Field("StartPos").GetValue<float>();
-                var endPos = tr.Field("EndPos").GetValue<float>();
-                var span = endPos - startPos;
-                var v9 = GetNoteSpeedOffsetY(__instance, span);
-                var bounceY = startPos + span * t + v9;
-                __result = bounceY;
-
-                // 外框（弧形提示线）：弧心固定在音符轨道圆心（屏幕中心，localPosition 不动），
-                // 弧大小直接跟随音符当前径向位置（Majdata tapLine：bounceLineScale = clamp01(distance/4.8)）。
-                // 弹跳起点（distance=4.8 → scale=1）由窗口前分支的"预过渡"衔接（最后 50ms 原版渐进值
-                // 平滑过渡到 1），弹跳期间直接设置——立即跟随、无跳变。
+                value2 = GetBounceDurationAt(value, value3);
+                if (value2 <= 0f)
+                {
+                    return;
+                }
+            }
+            float num = NotesManager.GetCurrentMsec() - value;
+            float num2 = value2 * 1000f;
+            if (num < -num2)
+            {
+                SetBounceAlpha(__instance, 0f);
+                SetBounceChildrenActive(__instance, active: false);
+                SetBounceGuideActive(__instance, active: false);
+            }
+            else if (num < 0f)
+            {
+                int value4 = noteIndex;
+                float value5 = 1.225f;
+                if (!SpawnRadiusByNoteIndex.TryGetValue(value4, out value5) && BounceTypeByNoteIndex.TryGetValue(value4, out var value6))
+                {
+                    value5 = GetSpawnRadiusAt(value, value6);
+                }
+                float num3 = Mathf.Clamp(num + num2, 0f, num2);
+                float num4 = num2 * 0.5f;
+                float num5 = (RingValuesByNoteIndex.TryGetValue(value4, out var value7) ? value7.Destroy : 4.8f);
+                float num6 = 8f * (num5 - value5) / (num2 * num2);
+                float num7 = num3 - num4;
+                float num8 = value5 + 0.5f * num6 * num7 * num7;
+                float num9 = (num8 - 1.225f) / 3.5750003f;
+                float value8 = TraverseRead(NoteRefs.StartPos, __instance, "StartPos");
+                float num10 = TraverseRead(NoteRefs.EndPos, __instance, "EndPos") - value8;
+                float noteSpeedOffsetY = GetNoteSpeedOffsetY(__instance, num10);
+                float num11 = value8 + num10 * num9 + noteSpeedOffsetY;
+                __result = num11;
                 try
                 {
-                    var guide = tr.Field("GuideObj").GetValue<NoteGuide>();
-                    var gt = guide != null ? guide.transform : tr.Field("NoteGuideTrans").GetValue<Transform>();
-                    if (gt != null)
+                    NoteGuide value9 = BounceGuideOf(__instance);
+                    Transform transform = ((value9 != null) ? value9.transform : NoteGuideTransOf(__instance));
+                    if (transform != null)
                     {
-                        var s = Mathf.Clamp01(distance / BounceJudgeLine);
-                        if (s < 0.01f) s = 0.01f;
-                        gt.localScale = new Vector3(s, s, 1f);
+                        float num12 = Mathf.Clamp01(num8 / 4.8f);
+                        if (num12 < 0.01f)
+                        {
+                            num12 = 0.01f;
+                        }
+                        transform.localScale = new UnityEngine.Vector3(num12, num12, 1f);
                     }
                 }
                 catch
                 {
                 }
-
-                // 光效/绝赞：挂到 NoteObj 下跟随（音符的一部分，旋转无碍）。
-                ReparentBounceEffects(tr);
-
-                SetBounceAlpha(tr, 1f);
-                SetBounceChildrenActive(tr, true);
-                SetBounceGuideActive(tr, true);
-                return;
+                ReparentBounceEffects(__instance);
+                SetBounceAlpha(__instance, 1f);
+                SetBounceChildrenActive(__instance, active: true);
+                SetBounceGuideActive(__instance, active: true);
             }
-
-            // 判定后：恢复可见，外框缩放交给原版每帧继续接管（音符过判定线后外框应随
-            // 原版 progress 继续缩小，不能在这里强制设回 1——否则外框停在 1 与下落中的
-            // 音符错位）。
-            SetBounceAlpha(tr, 1f);
-            SetBounceChildrenActive(tr, true);
-            SetBounceGuideActive(tr, true);
+            else
+            {
+                SetBounceAlpha(__instance, 1f);
+                SetBounceChildrenActive(__instance, active: true);
+                SetBounceGuideActive(__instance, active: true);
+            }
         }
         catch
         {
@@ -155,92 +125,18 @@ public partial class CustomNoteTypes
     /// <summary>光效/绝赞挂到 NoteObj 下（保持世界位置），随音符弹跳移动（音符的一部分，
     /// 圆形/星形光效旋转无碍）。音符回池复用 Initialize 时层级由原版重新设置。
     /// 外框（NoteGuide 弧形）不挂载——见 bounce 分支的 delta 位移方案。</summary>
-    private static void ReparentBounceEffects(Traverse tr)
-    {
-        try
-        {
-            var noteObj = tr.Field("NoteObj").GetValue<GameObject>();
-            if (noteObj == null) return;
-            var noteTrans = noteObj.transform;
-            var eff = tr.Field("EffectSprite").GetValue<SpriteRenderer>();
-            if (eff != null && eff.transform.parent != noteTrans)
-            {
-                eff.transform.SetParent(noteTrans, true);
-            }
-        }
-        catch
-        {
-        }
 
-        try
-        {
-            var noteObj = tr.Field("NoteObj").GetValue<GameObject>();
-            if (noteObj == null) return;
-            var noteTrans = noteObj.transform;
-            var exObj = tr.Field("ExObj").GetValue<GameObject>();
-            if (exObj != null && exObj.transform.parent != noteTrans)
-            {
-                exObj.transform.SetParent(noteTrans, true);
-            }
-        }
-        catch
-        {
-        }
-    }
 
-    private static void SetBounceAlpha(Traverse tr, float alpha)
-    {
-        var sr = tr.Field("SpriteRender").GetValue<SpriteRenderer>();
-        if (sr != null)
-        {
-            var c = sr.color;
-            c.a = alpha;
-            sr.color = c;
-        }
 
-        var srEx = tr.Field("SpriteRenderEx").GetValue<SpriteRenderer>();
-        if (srEx != null)
-        {
-            var c = srEx.color;
-            c.a = alpha;
-            srEx.color = c;
-        }
-    }
 
     /// <summary>外框（NoteGuide 判定提示线）的显示开关。弹跳窗口前隐藏（note 弹出前外框不可见），
     /// 弹跳窗口内显示并跟随缩放。SetActive 不会被原版每帧覆盖（原版 SetAlpha 仍执行，恢复后正常）。</summary>
-    private static void SetBounceGuideActive(Traverse tr, bool active)
-    {
-        try
-        {
-            var guide = tr.Field("GuideObj").GetValue<NoteGuide>();
-            if (guide != null)
-            {
-                guide.gameObject.SetActive(active);
-            }
-        }
-        catch
-        {
-        }
-    }
+
 
     /// <summary>光效（Break 脉冲）的显示开关（SetActive）。它的颜色每帧被原版
     /// GetNoteYPosition 重设，用颜色隐藏无效（且会破坏脉冲观感），只能开关 active。
     /// 外框（NoteGuide）不隐藏——原版淡入，无闪现问题。</summary>
-    private static void SetBounceChildrenActive(Traverse tr, bool active)
-    {
-        try
-        {
-            var eff = tr.Field("EffectSprite").GetValue<SpriteRenderer>();
-            if (eff != null)
-            {
-                eff.gameObject.SetActive(active);
-            }
-        }
-        catch
-        {
-        }
-    }
+
 
     /// <summary>弹跳音符激活瞬间（base Initialize）隐藏光效并把光效挂到 NoteObj 下
     /// ——否则激活帧光效会在生成点闪现一瞬。音符贴图的最终隐藏由各子类 Initialize 后置
@@ -249,19 +145,19 @@ public partial class CustomNoteTypes
     [HarmonyPatch(typeof(NoteBase), "Initialize")]
     public static void BounceHideOnInit(NoteBase __instance)
     {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-        if (BounceDurationByNoteIndex.Count == 0 || __instance == null) return;
-        if (__instance is TouchHoldC || __instance is TouchNoteB) return;
+        if (!FeaturesEnabled(__instance) || BounceDurationByNoteIndex.Count == 0 || __instance == null || __instance is TouchHoldC || __instance is TouchNoteB)
+        {
+            return;
+        }
         try
         {
-            var tr = Traverse.Create(__instance);
-            var index = tr.Field("NoteIndex").GetValue<int>();
-            float bounce;
-            if (!BounceDurationByNoteIndex.TryGetValue(index, out bounce) || bounce <= 0f) return;
-            SetBounceChildrenActive(tr, false);
-            SetBounceAlpha(tr, 0f);
-            ReparentBounceEffects(tr);
+            int value = NoteIndexOf(__instance);
+            if (BounceDurationByNoteIndex.TryGetValue(value, out var value2) && !(value2 <= 0f))
+            {
+                SetBounceChildrenActive(__instance, active: false);
+                SetBounceAlpha(__instance, 0f);
+                ReparentBounceEffects(__instance);
+            }
         }
         catch
         {
@@ -272,14 +168,17 @@ public partial class CustomNoteTypes
     /// 而 UpdateCtrl 注册在 UpdateNotes 之后——不在注册流程内隐藏就会闪一帧）。</summary>
     private static void BounceHideVisualFinal(NoteBase note)
     {
-        if (BounceDurationByNoteIndex.Count == 0 || note == null) return;
+        if (BounceDurationByNoteIndex.Count == 0 || note == null)
+        {
+            return;
+        }
         try
         {
-            var tr = Traverse.Create(note);
-            var index = tr.Field("NoteIndex").GetValue<int>();
-            float bounce;
-            if (!BounceDurationByNoteIndex.TryGetValue(index, out bounce) || bounce <= 0f) return;
-            SetBounceAlpha(tr, 0f);
+            int value = NoteIndexOf(note);
+            if (BounceDurationByNoteIndex.TryGetValue(value, out var value2) && !(value2 <= 0f))
+            {
+                SetBounceAlpha(note, 0f);
+            }
         }
         catch
         {
@@ -329,5 +228,91 @@ public partial class CustomNoteTypes
         if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
 
         BounceHideVisualFinal(__instance);
+    }
+
+
+    private static void ReparentBounceEffects(NoteBase tr)
+    {
+        try
+        {
+            GameObject value = BounceNoteObjectOf(tr);
+            if (value == null)
+            {
+                return;
+            }
+            Transform transform = value.transform;
+            SpriteRenderer value2 = EffectSpriteOf(tr);
+            if (value2 != null && value2.transform.parent != transform)
+            {
+                value2.transform.SetParent(transform, worldPositionStays: true);
+            }
+        }
+        catch
+        {
+        }
+        try
+        {
+            GameObject value3 = BounceNoteObjectOf(tr);
+            if (!(value3 == null))
+            {
+                Transform transform2 = value3.transform;
+                GameObject value4 = NoteExObjectOf(tr);
+                if (value4 != null && value4.transform.parent != transform2)
+                {
+                    value4.transform.SetParent(transform2, worldPositionStays: true);
+                }
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void SetBounceAlpha(NoteBase tr, float alpha)
+    {
+        SpriteRenderer value = BounceSpriteOf(tr);
+        if (value != null)
+        {
+            Color color = value.color;
+            color.a = alpha;
+            value.color = color;
+        }
+        SpriteRenderer value2 = BounceSpriteExOf(tr);
+        if (value2 != null)
+        {
+            Color color2 = value2.color;
+            color2.a = alpha;
+            value2.color = color2;
+        }
+    }
+
+    private static void SetBounceGuideActive(NoteBase tr, bool active)
+    {
+        try
+        {
+            NoteGuide value = BounceGuideOf(tr);
+            if (value != null)
+            {
+                value.gameObject.SetActive(active);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void SetBounceChildrenActive(NoteBase tr, bool active)
+    {
+        try
+        {
+            SpriteRenderer value = EffectSpriteOf(tr);
+            if (value != null)
+            {
+                value.gameObject.SetActive(active);
+            }
+        }
+        catch
+        {
+        }
     }
 }

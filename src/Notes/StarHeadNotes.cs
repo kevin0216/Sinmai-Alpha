@@ -24,7 +24,7 @@ public partial class CustomNoteTypes
         public float Angle, NativeSpeed;
         public int Monitor, LastFrame = -1;
     }
-    private static readonly ConditionalWeakTable<NoteData, StarHeadValue> StarHeads = new();
+    private static ConditionalWeakTable<NoteData, StarHeadValue> StarHeads = new ConditionalWeakTable<NoteData, StarHeadValue>();
     private static readonly Dictionary<NoteBase, StarHeadLease> StarHeadOwners = new();
     private static string pendingStarHead { get => RuntimeCharts.Current.pendingStarHead; set => RuntimeCharts.Current.pendingStarHead = value; }
 
@@ -96,31 +96,61 @@ public partial class CustomNoteTypes
             picture.rotation = basis.rotation;
         }
     }
-    [HarmonyPostfix, HarmonyPriority(Priority.Last + 30), HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
+    [HarmonyPostfix]
+    [HarmonyPriority(30)]
+    [HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
     public static void UpdateStarHeads(GameCtrl __instance)
     {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-        foreach (var pair in StarHeadOwners.Where(p => p.Value.Monitor == __instance.MonitorIndex).ToArray())
+        if (!FeaturesEnabled(__instance))
         {
-            var owner = pair.Key; var lease = pair.Value;
-            if (owner == null || !owner.gameObject.activeInHierarchy || owner.IsEnd() || lease.Picture == null || lease.Basis == null)
-            { RestoreStarHead(owner); continue; }
-            // Use wall-frame delta exactly as StarDrop, including paused song
-            // time. SV/HS, native StarRotate and game-frame speed do not alter it.
-            // Hidden/pre-reveal frames do not accumulate rotation.
-            var scale = lease.Picture.localScale;
-            if (lease.LastFrame != Time.frameCount && Mathf.Abs(scale.x) > .000001f && Mathf.Abs(scale.y) > .000001f && !GameManager.ForceHideNote(lease.Monitor))
+            return;
+        }
+        int monitorIndex = __instance.MonitorIndex;
+        List<KeyValuePair<NoteBase, StarHeadLease>> list = StarHeadScratch;
+        list.Clear();
+        foreach (KeyValuePair<NoteBase, StarHeadLease> starHeadOwner in StarHeadOwners)
+        {
+            if (starHeadOwner.Value.Monitor == monitorIndex)
             {
-                if (lease.Value.Rotate) lease.Angle = Mathf.Repeat(lease.Angle + StarHead.DegreesPerSecond * Time.deltaTime, 360);
-                lease.LastFrame = Time.frameCount;
+                list.Add(starHeadOwner);
             }
-            lease.Picture.rotation = lease.Basis.rotation * Quaternion.Euler(0, 0, lease.Angle);
-            // Only NoteObj graphics (and its EX/Break children) rotate. The
-            // radial launcher, guide, real input, NoteCheck and score stay native.
+        }
+        try
+        {
+            UpdateStarHeadOwners(list);
+        }
+        finally
+        {
+            list.Clear();
         }
     }
     [HarmonyPrefix, HarmonyPriority(Priority.First + 20), HarmonyPatch(typeof(GameCtrl), "ForceNoteCollect")]
     public static void CollectStarHeads(GameCtrl __instance)
     { foreach (var pair in StarHeadOwners.Where(p => p.Value.Monitor == __instance.MonitorIndex).ToArray()) RestoreStarHead(pair.Key); }
+
+
+    private static void UpdateStarHeadOwners(List<KeyValuePair<NoteBase, StarHeadLease>> array)
+    {
+        for (int num = 0; num < array.Count; num++)
+        {
+            KeyValuePair<NoteBase, StarHeadLease> keyValuePair = array[num];
+            NoteBase key = keyValuePair.Key;
+            StarHeadLease value = keyValuePair.Value;
+            if (key == null || !key.gameObject.activeInHierarchy || key.IsEnd() || value.Picture == null || value.Basis == null)
+            {
+                RestoreStarHead(key);
+                continue;
+            }
+            UnityEngine.Vector3 localScale = value.Picture.localScale;
+            if (value.LastFrame != Time.frameCount && Mathf.Abs(localScale.x) > 1E-06f && Mathf.Abs(localScale.y) > 1E-06f && !GameManager.ForceHideNote(value.Monitor))
+            {
+                if (value.Value.Rotate)
+                {
+                    value.Angle = Mathf.Repeat(value.Angle + 400f * Time.deltaTime, 360f);
+                }
+                value.LastFrame = Time.frameCount;
+            }
+            value.Picture.rotation = value.Basis.rotation * UnityEngine.Quaternion.Euler(0f, 0f, value.Angle);
+        }
+    }
 }

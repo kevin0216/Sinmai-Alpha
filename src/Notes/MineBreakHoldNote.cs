@@ -1,4 +1,3 @@
-using HarmonyLib;
 using Manager;
 using Monitor;
 using UnityEngine;
@@ -23,10 +22,8 @@ public class MineBreakHoldNote : BreakHoldNote
     protected override void SetEach(bool eachFlag)
     {
         base.SetEach(eachFlag);
-        // SetEach 会把 BreakEffectSprite（绝赞光效层）赋成原版 BreakHoldEff（橙色闪光），
-        // 替换成 hold_break_eff_mine（用户 2026-08 补充的素材）。
-        var breakEff = Traverse.Create(this).Field("BreakEffectSprite").GetValue<SpriteRenderer>();
-        CustomNoteTypes.ApplyMineEffectTexture(breakEff, "hold_break_eff_mine");
+        // The protected BreakHoldNote.BreakEffectSprite field, read directly (was a Traverse read).
+        CustomNoteTypes.ApplyMineEffectTexture(BreakEffectSprite, "hold_break_eff_mine");
     }
 
     private new void Awake()

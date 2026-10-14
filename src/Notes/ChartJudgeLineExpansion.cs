@@ -3,7 +3,6 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using SinmaiAlpha.ChartVisuals;
 using SinmaiAlpha.Hosting;
-using HarmonyLib;
 using Manager;
 using Monitor;
 using Monitor.Game;
@@ -59,7 +58,7 @@ public partial class CustomNoteTypes
                 Copy.enabled = Source.enabled && Source.sprite != null && opacity > .001f;
             }
         }
-        private static readonly ConditionalWeakTable<NotesReader, Timeline> Timelines = new();
+        private static ConditionalWeakTable<NotesReader, Timeline> Timelines = new();
         private static readonly Dictionary<GameMonitor, Lease> Leases = new();
 
         public static void Build(NotesReader reader, IEnumerable<PresentationChange> changes)
@@ -72,24 +71,46 @@ public partial class CustomNoteTypes
         }
         public static void Apply(GameMonitor monitor)
         {
-            if (monitor == null) return;
-            if (GuiSizes.SinglePlayer && monitor.MonitorIndex != 0) { Release(monitor); return; }
-            var reader = NotesManager.Instance(monitor.MonitorIndex).getReader();
-            if (reader == null || !Timelines.TryGetValue(reader, out var timeline)) { Release(monitor); return; }
-            var controller = Traverse.Create(monitor).Field("GameController").GetValue<GameCtrl>();
-            var outline = controller != null ? Traverse.Create(controller).Field("_guideEndPointObj").GetValue<GameObject>() : null;
-            var source = outline != null ? outline.GetComponent<SpriteRenderer>() : null;
-            if (source == null) { Release(monitor); return; }
-            if (!Leases.TryGetValue(monitor, out var lease) || lease.Reader != reader || lease.Timeline != timeline || lease.Source != source || lease.Copy == null)
+            if (monitor == null)
+            {
+                return;
+            }
+            if (GuiSizes.SinglePlayer && monitor.MonitorIndex != 0)
             {
                 Release(monitor);
-                var go = new GameObject("ChartJudgeLineExpansion", typeof(SpriteRenderer));
-                go.transform.SetParent(source.transform, false);
-                var copy = go.GetComponent<SpriteRenderer>(); copy.enabled = false;
-                lease = new Lease { Reader = reader, Timeline = timeline, Source = source, Copy = copy };
-                Leases.Add(monitor, lease);
+                return;
             }
-            lease.Apply(NotesManager.GetCurrentMsec());
+            NotesReader reader = NotesManager.Instance(monitor.MonitorIndex).getReader();
+            if (reader == null || !Timelines.TryGetValue(reader, out var value))
+            {
+                Release(monitor);
+                return;
+            }
+            GameCtrl value2 = ControllerOf(monitor);
+            GameObject gameObject = ((value2 != null) ? GuideEndPointOf(value2) : null);
+            SpriteRenderer spriteRenderer = ((gameObject != null) ? gameObject.GetComponent<SpriteRenderer>() : null);
+            if (spriteRenderer == null)
+            {
+                Release(monitor);
+                return;
+            }
+            if (!Leases.TryGetValue(monitor, out var value3) || value3.Reader != reader || value3.Timeline != value || value3.Source != spriteRenderer || value3.Copy == null)
+            {
+                Release(monitor);
+                GameObject gameObject2 = new GameObject("ChartJudgeLineExpansion", typeof(SpriteRenderer));
+                gameObject2.transform.SetParent(spriteRenderer.transform, worldPositionStays: false);
+                SpriteRenderer component = gameObject2.GetComponent<SpriteRenderer>();
+                component.enabled = false;
+                value3 = new Lease
+                {
+                    Reader = reader,
+                    Timeline = value,
+                    Source = spriteRenderer,
+                    Copy = component
+                };
+                Leases.Add(monitor, value3);
+            }
+            value3.Apply(NotesManager.GetCurrentMsec());
         }
         private static void Release(GameMonitor monitor)
         {
@@ -105,6 +126,7 @@ public partial class CustomNoteTypes
         {
             foreach (var lease in Leases.Values) lease.Dispose();
             Leases.Clear();
+            Timelines = new();
         }
     }
 }

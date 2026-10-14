@@ -1,3 +1,4 @@
+using System.Reflection;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -52,106 +53,163 @@ internal sealed class ChartScreenEffects : IDisposable
 
     internal bool TryDraw(RenderTexture source, RenderTexture destination, PresentationRect bounds, PresentationRect visible, PresentationRect playfield, double now)
     {
-        // 0.6.0's shader consumes a playfield-sized image and has no legacy
-        // _PlayfieldRect clip. Crop both capture and output in the adapter.
         bounds = playfield;
         visible = visible.Intersect(playfield);
-        if (failed || !bounds.HasArea || !visible.HasArea) return false;
-        var previous = RenderTexture.active;
+        if (failed || !bounds.HasArea || !visible.HasArea)
+        {
+            return false;
+        }
+        RenderTexture active = RenderTexture.active;
         try
         {
-            var seconds = (float)(now * .001); var priorSeconds = (float)(previousTime * .001);
-            var advanced = seconds != priorSeconds;
-            if (seconds < priorSeconds || seconds - priorSeconds > .5f) ReleaseHistory();
+            float num = (float)(now * 0.001);
+            float num2 = (float)(previousTime * 0.001);
+            bool advanced = num != num2;
+            if (num < num2 || num - num2 > 0.5f)
+            {
+                ReleaseHistory();
+            }
             previousTime = now;
-            var blur = Value("gaussian", now); var neon = Value("neon", now);
-            var trail = Mathf.Clamp01(Value("trail", now)); var brightness = Value("brightness", now);
-            var saturation = Mathf.Clamp01(Value("saturation", now)); var contrast = Value("contrast", now);
-            var rainbow = Mathf.Clamp01(Value("rainbow", now)); var vignette = Mathf.Clamp01(Value("vignette", now));
-            var glitch = Mathf.Clamp01(Value("glitch", now)); var tv = Mathf.Clamp01(Value("tvnoise", now));
-            var hue = Value("hue", now) * Mathf.Deg2Rad; var flash = Mathf.Clamp(Value("flash", now), -1, 1);
-            var tint = Tint(now); var offset = Shake(now);
-            var active = Mathf.Abs(blur) > .001f || Mathf.Abs(neon) > .001f || trail > .001f || Mathf.Abs(brightness) > .001f || saturation > .001f ||
-                Mathf.Abs(contrast) > .001f || rainbow > .001f || vignette > .001f || glitch > .001f || tv > .001f ||
-                Mathf.Abs(hue) > .0001f || Mathf.Abs(flash) > .001f || tint.w > .001f ||
-                Mathf.Abs(offset.x) > .0001f || Mathf.Abs(offset.y) > .0001f;
-            foreach (var filter in ExtraScreenFilters.All) active |= Mathf.Abs(Value(filter.Kind, now)) > .0001f;
-            var hasTrail = tracks.ContainsKey("trail");
-
+            bool flag = Active(now);
+            bool flag2 = tracks.ContainsKey("trail");
             EnsureMaterials();
             PresentationChange kaleidoscopeSource = null;
             if (tracks.TryGetValue("kaleidoscope", out var kaleidoscopeTrack)) kaleidoscopeTrack.Evaluate(now, out kaleidoscopeSource);
             effect = kaleidoscopeSource != null && !kaleidoscopeSource.AngleMode ? legacyEffect : modernEffect;
-            var width = Math.Max(1, Mathf.RoundToInt(source.width * bounds.Width));
-            var height = Math.Max(1, Mathf.RoundToInt(source.height * bounds.Height));
-            EnsureTargets(width, height, source.format);
-            // Allocate at the initial inactive chart frame, never on the first
-            // SHAKE/GLITCH. Keep the same full-resolution rendering semantics.
-            if (hasTrail) EnsureHistory();
-            if (!active && !hasTrail) { trailActive = false; trailSeed = 0; return false; }
-            Capture(source, bounds, visible);
-            if (hasTrail)
+            int num15 = Math.Max(1, Mathf.RoundToInt((float)source.width * bounds.Width));
+            int num16 = Math.Max(1, Mathf.RoundToInt((float)source.height * bounds.Height));
+            EnsureTargets(num15, num16, source.format);
+            if (flag2)
+            {
+                EnsureHistory();
+            }
+            if (!flag && !flag2)
+            {
+                trailActive = false;
+                trailSeed = 0;
+                return false;
+            }
+            // `input` is read by the effect pass (flag), the seed and the history shift. Seed and shift run on the
+            // GPU only while TrailMayShow (their copies cannot be read otherwise); trailSeed/trailFrames advance
+            // exactly as before either way, so which frames seed and shift does not change.
+            if (double.IsNaN(now))
+            {
+                trailUngated = true;
+            }
+            bool flag3 = flag2 && TrailMayShow(now);
+            bool flag4 = flag2 && trailSeed < 3;
+            bool flag5 = flag2 && !flag4 && advanced && trailFrames >= 4;
+            if (flag || (flag3 && (flag4 || flag5)))
+            {
+                Capture(source, bounds, visible);
+            }
+            if (flag2)
             {
                 EnsureHistory();
                 if (trailSeed < 3)
                 {
-                    for (var i = 0; i < history.Length; i++) Graphics.Blit(input, history[i]);
-                    trailSeed = 3; trailFrames = 0;
+                    if (flag3)
+                    {
+                        for (int j = 0; j < history.Length; j++)
+                        {
+                            Graphics.Blit(input, history[j]);
+                        }
+                    }
+                    trailSeed = 3;
+                    trailFrames = 0;
                 }
                 trailActive = true;
             }
             else
             {
-                trailActive = false; trailSeed = 0;
+                trailActive = false;
+                trailSeed = 0;
             }
-            // Reference history follows raw frames throughout a chart with Trail,
-            // including inactive spans, and advances only when chart time changes.
-            if (!active) { AdvanceHistory(advanced); return false; }
-            effect.SetFloat("_Blur", blur); effect.SetFloat("_Neon", neon); effect.SetFloat("_Trail", trail);
-            effect.SetFloat("_Brightness", brightness); effect.SetFloat("_Saturation", saturation); effect.SetFloat("_Contrast", contrast);
-            effect.SetFloat("_Rainbow", rainbow); effect.SetFloat("_Vignette", vignette); effect.SetFloat("_Glitch", glitch);
-            PresentationChange vignetteSource = null;
-            if (tracks.TryGetValue("vignette", out var vignetteTrack)) vignetteTrack.Evaluate(now, out vignetteSource);
-            effect.SetFloat("_VignetteGradient", vignetteSource != null && vignetteSource.Gradient ? 1 : 0);
-            effect.SetFloat("_TVNoise", tv); effect.SetFloat("_Hue", hue); effect.SetFloat("_Flash", flash);
-            effect.SetFloat("_EffectTime", (float)(now * .001)); effect.SetVector("_TintColor", tint);
-            effect.SetFloat("_OffsetX", offset.x); effect.SetFloat("_OffsetY", offset.y);
-            // MOVE/ROTATE/ZOOM have already transformed native display objects.
-            effect.SetFloat("_Rotate", 0); effect.SetFloat("_Zoom", 0); effect.SetFloat("_Fade", 0);
-            effect.SetFloat("_AlphaClipSpace", 0);
-            var field = Relative(playfield, bounds);
-            effect.SetVector("_PlayfieldRect", new Vector4(field.x, field.y, field.xMax, field.yMax));
-            effect.SetVector("_MainTex_TexelSize", new Vector4(1f / width, 1f / height, width, height));
-            foreach (var filter in ExtraScreenFilters.All)
+            if (!flag)
             {
-                PresentationChange dominant = null;
-                var amount = tracks.TryGetValue(filter.Kind, out var filterTrack) ? filterTrack.Evaluate(now, out dominant) : 0;
-                effect.SetFloat(filter.Uniform, amount);
-                if (filter.Kind == "kaleidoscope") effect.SetFloat("_KaleidoscopeAngle", (filterTrack?.EvaluateKaleidoscopeAngle(now) ?? 0) * Mathf.Deg2Rad);
-                if (filter.Kind == "shatter" || filter.Kind == "ripple")
-                    effect.SetFloat(filter.Uniform + "Phase", dominant == null ? 0 : (float)(now * .001) - (float)(dominant.Time * .001));
+                AdvanceHistory(advanced, flag3);
+                return false;
             }
-            for (var i = 0; i < 3; i++) effect.SetTexture("_HistoryTex" + (i == 0 ? "" : (i + 1).ToString()), trailActive ? (Texture)history[i] : Texture2D.blackTexture);
+            // Uniform values are needed only for a draw; Active already checked idle frames.
+            float num3 = Value("gaussian", now);
+            float num4 = Value("neon", now);
+            float num5 = Mathf.Clamp01(Value("trail", now));
+            float num6 = Value("brightness", now);
+            float num7 = Mathf.Clamp01(Value("saturation", now));
+            float num8 = Value("contrast", now);
+            float num9 = Mathf.Clamp01(Value("rainbow", now));
+            float num10 = Mathf.Clamp01(Value("vignette", now));
+            float num11 = Mathf.Clamp01(Value("glitch", now));
+            float num12 = Mathf.Clamp01(Value("tvnoise", now));
+            float num13 = Value("hue", now) * ((float)Math.PI / 180f);
+            float num14 = Mathf.Clamp(Value("flash", now), -1f, 1f);
+            Vector4 value = Tint(now);
+            Vector2 vector = Shake(now);
+            effect.SetFloat("_Blur", num3);
+            effect.SetFloat("_Neon", num4);
+            effect.SetFloat("_Trail", num5);
+            effect.SetFloat("_Brightness", num6);
+            effect.SetFloat("_Saturation", num7);
+            effect.SetFloat("_Contrast", num8);
+            effect.SetFloat("_Rainbow", num9);
+            effect.SetFloat("_Vignette", num10);
+            effect.SetFloat("_Glitch", num11);
+            PresentationChange source2 = null;
+            if (tracks.TryGetValue("vignette", out var value2))
+            {
+                value2.Evaluate(now, out source2);
+            }
+            effect.SetFloat("_VignetteGradient", (source2 != null && source2.Gradient) ? 1 : 0);
+            effect.SetFloat("_TVNoise", num12);
+            effect.SetFloat("_Hue", num13);
+            effect.SetFloat("_Flash", num14);
+            effect.SetFloat("_EffectTime", (float)(now * 0.001));
+            effect.SetVector("_TintColor", value);
+            effect.SetFloat("_OffsetX", vector.x);
+            effect.SetFloat("_OffsetY", vector.y);
+            effect.SetFloat("_Rotate", 0f);
+            effect.SetFloat("_Zoom", 0f);
+            effect.SetFloat("_Fade", 0f);
+            effect.SetFloat("_AlphaClipSpace", 0f);
+            Rect rect = Relative(playfield, bounds);
+            effect.SetVector("_PlayfieldRect", new Vector4(rect.x, rect.y, rect.xMax, rect.yMax));
+            effect.SetVector("_MainTex_TexelSize", new Vector4(1f / (float)num15, 1f / (float)num16, num15, num16));
+            ExtraScreenFilters.Definition[] all = ExtraScreenFilters.All;
+            foreach (ExtraScreenFilters.Definition definition2 in all)
+            {
+                PresentationChange source3 = null;
+                float value3 = (tracks.TryGetValue(definition2.Kind, out var value4) ? value4.Evaluate(now, out source3) : 0f);
+                effect.SetFloat(definition2.Uniform, value3);
+                if (definition2.Kind == "kaleidoscope") effect.SetFloat("_KaleidoscopeAngle", (value4?.EvaluateKaleidoscopeAngle(now) ?? 0) * Mathf.Deg2Rad);
+                if (definition2.Kind == "shatter" || definition2.Kind == "ripple")
+                {
+                    effect.SetFloat(definition2.Uniform + "Phase", (source3 == null) ? 0f : ((float)(now * 0.001) - (float)(source3.Time * 0.001)));
+                }
+            }
+            for (int k = 0; k < 3; k++)
+            {
+                effect.SetTexture("_HistoryTex" + ((k == 0) ? "" : (k + 1).ToString()), trailActive ? ((Texture)history[k]) : ((Texture)Texture2D.blackTexture));
+            }
             Graphics.Blit(input, output, effect);
-            AdvanceHistory(advanced);
-            var uv = Relative(visible, bounds);
+            AdvanceHistory(advanced, flag3);
+            Rect uv = Relative(visible, bounds);
             Draw(destination, PixelRect(visible, source.width, source.height), output, uv);
             return true;
         }
-        catch (Exception error)
+        catch (Exception ex)
         {
             failed = true;
-            MelonLogger.Warning("[Chart Effects] Player frame effects unavailable: " + error.Message);
-            Dispose(); return false;
+            MelonLogger.Warning("[Chart Effects] Player frame effects unavailable: " + ex.Message);
+            Dispose();
+            return false;
         }
-        finally { RenderTexture.active = previous; }
+        finally
+        {
+            RenderTexture.active = active;
+        }
     }
 
-    private void AdvanceHistory(bool advanced)
-    {
-        if (!trailActive || !advanced || ++trailFrames < 5) return;
-        Graphics.Blit(history[1], history[2]); Graphics.Blit(history[0], history[1]); Graphics.Blit(input, history[0]); trailFrames = 0;
-    }
+
     private Vector2 Shake(double now)
     {
         if (!tracks.TryGetValue("shake", out var track)) return Vector2.zero;
@@ -181,6 +239,7 @@ internal sealed class ChartScreenEffects : IDisposable
         effect = modernEffect = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
         legacyEffect = new Material(EffectAssets.Legacy) { hideFlags = HideFlags.HideAndDontSave };
         copy = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+        blit = CreateBlit(shader);
     }
     private void EnsureTargets(int width, int height, RenderTextureFormat format)
     {
@@ -211,9 +270,20 @@ internal sealed class ChartScreenEffects : IDisposable
     private static Rect PixelRect(PresentationRect rect, int width, int height) => new(rect.X * width, (1 - rect.Top) * height, rect.Width * width, rect.Height * height);
     private void Draw(RenderTexture target, Rect pixels, Texture texture, Rect uv)
     {
-        Graphics.SetRenderTarget(target); GL.PushMatrix();
-        try { GL.LoadPixelMatrix(0, target != null ? target.width : Screen.width, target != null ? target.height : Screen.height, 0); Graphics.DrawTexture(pixels, texture, uv, 0, 0, 0, 0, Color.white, copy); }
-        finally { GL.PopMatrix(); }
+        Graphics.SetRenderTarget(target);
+        GL.PushMatrix();
+        try
+        {
+            GL.LoadPixelMatrix(0f, (target != null) ? target.width : Screen.width, (target != null) ? target.height : Screen.height, 0f);
+            // `blit` only into a render texture (full-target viewport) and where texels land 1:1 on pixels: every
+            // fetch is then at a texel centre, where copy's uv round trip ((u - 0.5) * a / a + 0.5, ~2e-4 texel) and
+            // this offset stay well inside half a filter-weight step, so both give the texel's bytes. Else `copy`.
+            Graphics.DrawTexture(pixels, texture, uv, 0, 0, 0, 0, Color.white, (blit != null && target != null && TexelAligned(pixels, texture, uv)) ? blit : copy);
+        }
+        finally
+        {
+            GL.PopMatrix();
+        }
     }
     private static void Release(ref RenderTexture texture)
     { if (texture != null) { texture.Release(); Object.Destroy(texture); texture = null; } }
@@ -223,7 +293,8 @@ internal sealed class ChartScreenEffects : IDisposable
     {
         Release(ref input); Release(ref output); ReleaseHistory();
         if (modernEffect != null) Object.Destroy(modernEffect); if (legacyEffect != null) Object.Destroy(legacyEffect);
-        if (copy != null) Object.Destroy(copy); effect = modernEffect = legacyEffect = copy = null;
+        if (copy != null) Object.Destroy(copy); if (blit != null) Object.Destroy(blit);
+        effect = modernEffect = legacyEffect = copy = blit = null;
         if (acquired) { acquired = false; EffectAssets.Release(); }
     }
 
@@ -249,5 +320,201 @@ internal sealed class ChartScreenEffects : IDisposable
         }
         internal static void Release()
         { if (--owners > 0) return; if (bundle != null) bundle.Unload(true); bundle = null; shader = Legacy = null; owners = 0; }
+    }
+
+
+    private Material blit;
+
+    private double activeTime = double.NaN;
+
+    private bool activeValue;
+
+    private PresentationCommands.Track trailWindowsTrack;
+
+    private double[] trailWindows;
+
+    private bool trailUngated;
+
+    private void AdvanceHistory(bool advanced, bool gpu)
+    {
+        if (trailActive && advanced && ++trailFrames >= 5)
+        {
+            if (gpu)
+            {
+                // Was Blit(history[1] -> [2]), Blit([0] -> [1]), Blit(input -> [0]): same-size texel copies, so moving
+                // the textures leaves every slot with the same bytes. Each takes its slot's sampler state (history
+                // Point/Repeat, input Bilinear/Clamp, as created); Capture clears and redraws input before any read.
+                RenderTexture renderTexture = history[2];
+                history[2] = history[1];
+                history[1] = history[0];
+                history[0] = input;
+                input = renderTexture;
+                history[0].filterMode = FilterMode.Point;
+                history[0].wrapMode = TextureWrapMode.Repeat;
+                input.filterMode = FilterMode.Bilinear;
+                input.wrapMode = TextureWrapMode.Clamp;
+            }
+            trailFrames = 0;
+        }
+    }
+
+    private bool Active(double now)
+    {
+        if (now == activeTime)
+        {
+            return activeValue;
+        }
+        float num = Value("gaussian", now);
+        float num2 = Value("neon", now);
+        float num3 = Mathf.Clamp01(Value("trail", now));
+        float num4 = Value("brightness", now);
+        float num5 = Mathf.Clamp01(Value("saturation", now));
+        float num6 = Value("contrast", now);
+        float num7 = Mathf.Clamp01(Value("rainbow", now));
+        float num8 = Mathf.Clamp01(Value("vignette", now));
+        float num9 = Mathf.Clamp01(Value("glitch", now));
+        float num10 = Mathf.Clamp01(Value("tvnoise", now));
+        float num11 = Value("hue", now) * ((float)Math.PI / 180f);
+        float num12 = Mathf.Clamp(Value("flash", now), -1f, 1f);
+        Vector4 vector = Tint(now);
+        Vector2 vector2 = Shake(now);
+        bool flag = Mathf.Abs(num) > 0.001f || Mathf.Abs(num2) > 0.001f || num3 > 0.001f || Mathf.Abs(num4) > 0.001f || num5 > 0.001f || Mathf.Abs(num6) > 0.001f || num7 > 0.001f || num8 > 0.001f || num9 > 0.001f || num10 > 0.001f || Mathf.Abs(num11) > 0.0001f || Mathf.Abs(num12) > 0.001f || vector.w > 0.001f || Mathf.Abs(vector2.x) > 0.0001f || Mathf.Abs(vector2.y) > 0.0001f;
+        ExtraScreenFilters.Definition[] all = ExtraScreenFilters.All;
+        foreach (ExtraScreenFilters.Definition definition in all)
+        {
+            flag |= Mathf.Abs(Value(definition.Kind, now)) > 0.0001f;
+        }
+        activeTime = now;
+        activeValue = flag;
+        return flag;
+    }
+
+    internal bool WillDraw(double now)
+    {
+        try
+        {
+            return !failed && Active(now);
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    private bool TrailMayShow(double now)
+    {
+        if (trailUngated || !tracks.TryGetValue("trail", out var value))
+        {
+            return true;
+        }
+        if (value != trailWindowsTrack)
+        {
+            trailWindows = TrailWindows(value);
+            trailWindowsTrack = value;
+        }
+        double[] array = trailWindows;
+        if (array == null)
+        {
+            return true;
+        }
+        double num = now * 0.001;
+        for (int i = 0; i < array.Length; i += 2)
+        {
+            if (array[i] <= num + 8.0 && array[i + 1] >= num)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static double[] TrailWindows(PresentationCommands.Track track)
+    {
+        try
+        {
+            object obj = typeof(PresentationCommands.Track).GetField("screenEffect", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(track);
+            if (!(obj?.GetType().GetField("allEvents", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(obj) is List<PresentationChange> list))
+            {
+                return null;
+            }
+            List<double> list2 = new List<double>();
+            double num = double.NaN;
+            foreach (PresentationChange item in list)
+            {
+                double num2 = item.Time * 0.001;
+                if (double.IsNaN(num2) || double.IsInfinity(num2))
+                {
+                    return null;
+                }
+                double num3 = (item.Duration >= 0f && !float.IsInfinity(item.Duration)) ? (num2 + (double)item.Duration) : double.PositiveInfinity;
+                if (item.ShakeMode != 0)
+                {
+                    if (item.Target != 0f)
+                    {
+                        list2.Add(num2 - 0.05);
+                        list2.Add(num3 + 0.05);
+                    }
+                    continue;
+                }
+                if (!double.IsNaN(num))
+                {
+                    list2.Add(num - 0.05);
+                    list2.Add(num2 + 0.05);
+                    num = double.NaN;
+                }
+                if (item.ShakeEnabled && item.Target != 0f)
+                {
+                    num = num2;
+                }
+                else
+                {
+                    list2.Add(num2 - 0.05);
+                    list2.Add(num3 + 0.05);
+                }
+            }
+            if (!double.IsNaN(num))
+            {
+                list2.Add(num - 0.05);
+                list2.Add(double.PositiveInfinity);
+            }
+            return list2.ToArray();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static Material CreateBlit(Shader effectShader)
+    {
+        Shader shader = Shader.Find("Hidden/BlitCopy");
+        if (shader != null && shader.isSupported)
+        {
+            Material material = new Material(shader)
+            {
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            material.SetColor("_Color", Color.white);
+            return material;
+        }
+        Material material2 = new Material(effectShader)
+        {
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        material2.SetVector("_PlayfieldRect", new Vector4(2f, 2f, 3f, 3f));
+        return material2;
+    }
+
+    private static bool TexelAligned(Rect pixels, Texture texture, Rect uv)
+    {
+        float num = (float)texture.width;
+        float num2 = (float)texture.height;
+        float num3 = Mathf.Abs(pixels.x - Mathf.Round(pixels.x)) + Mathf.Abs(uv.x * num - Mathf.Round(uv.x * num)) + Mathf.Abs(uv.width * num - pixels.width);
+        float num4 = Mathf.Abs(pixels.y - Mathf.Round(pixels.y)) + Mathf.Abs(uv.y * num2 - Mathf.Round(uv.y * num2)) + Mathf.Abs(uv.height * num2 - pixels.height);
+        if (num3 <= 0.001f && num4 <= 0.001f && Mathf.Abs(pixels.width - Mathf.Round(pixels.width)) <= 0.001f)
+        {
+            return Mathf.Abs(pixels.height - Mathf.Round(pixels.height)) <= 0.001f;
+        }
+        return false;
     }
 }

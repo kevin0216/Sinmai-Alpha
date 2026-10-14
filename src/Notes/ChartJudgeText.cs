@@ -17,17 +17,20 @@ public partial class CustomNoteTypes
 
     private static void ApplyJudgeTextPresentation(GameMonitor owner, NotesReader reader)
     {
-        if (!PresentationTimelines.TryGetValue(reader, out var timeline) ||
-            !timeline.Tracks.TryGetValue("showjudgetext", out var track))
+        if (!PresentationTimelines.TryGetValue(reader, out var value) || !value.Tracks.TryGetValue("showjudgetext", out var value2))
         {
             ReleaseJudgeTextPresentation(owner);
             return;
         }
-        var ctrl = Traverse.Create(owner).Field("GameController").GetValue<GameCtrl>();
-        if (ctrl == null) return;
-        if (!JudgeTextDisplays.TryGetValue(owner, out var display) || display == null)
-            JudgeTextDisplays[owner] = display = ctrl.gameObject.AddComponent<ChartJudgeTextDisplay>();
-        display.Bind(ctrl, owner.MonitorIndex, reader, track);
+        GameCtrl value3 = ControllerOf(owner);
+        if (!(value3 == null))
+        {
+            if (!JudgeTextDisplays.TryGetValue(owner, out var value4) || value4 == null)
+            {
+                value4 = (JudgeTextDisplays[owner] = value3.gameObject.AddComponent<ChartJudgeTextDisplay>());
+            }
+            value4.Bind(value3, owner.MonitorIndex, reader, value2);
+        }
     }
 
     private static void ReleaseJudgeTextPresentation(GameMonitor owner)

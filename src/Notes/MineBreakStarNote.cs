@@ -1,4 +1,3 @@
-using HarmonyLib;
 using Manager;
 using Monitor;
 using UnityEngine;
@@ -19,44 +18,44 @@ public class MineBreakStarNote : BreakStarNote, ISelfJudgingMineNote
 
     protected override bool Judge()
     {
-        var result = base.Judge();
-        if (result)
+        bool flag = base.Judge();
+        if (flag)
         {
             MineJudgeHelper.LogFirstUse();
-            MineJudgeHelper.SetJudgeResult(this, MineJudgeHelper.InvertStandard(GetJudgeResult()));
+            // The protected NoteBase.JudgeResult field, set directly (was a Traverse write through MineJudgeHelper.SetJudgeResult).
+            JudgeResult = MineJudgeHelper.InvertStandard(GetJudgeResult());
         }
-
-        return result;
+        return flag;
     }
 
     protected override bool JudgeToolate()
     {
-        var result = base.JudgeToolate();
-        if (result)
+        bool flag = base.JudgeToolate();
+        if (flag)
         {
             MineJudgeHelper.LogFirstUse();
-            MineJudgeHelper.SetJudgeResult(this, MineJudgeHelper.InvertStandard(GetJudgeResult()));
+            // The protected NoteBase.JudgeResult field, set directly (was a Traverse write through MineJudgeHelper.SetJudgeResult).
+            JudgeResult = MineJudgeHelper.InvertStandard(GetJudgeResult());
         }
-
-        return result;
+        return flag;
     }
 
     protected override void PlayJudgeSe()
     {
-        var traverse = Traverse.Create(this);
-        if (traverse.Field("ShotJudgeSound").GetValue<bool>()) return;
-
-        var box = NoteJudge.ConvertJudge(MineJudgeHelper.InvertStandard(GetJudgeResult()));
-        if (IsExNote)
+        // The protected NoteBase.ShotJudgeSound field, read and set directly (was two Traverse lookups per call).
+        if (!ShotJudgeSound)
         {
-            ReserveExJudgeSe(box);
+            NoteJudge.JudgeBox judge = NoteJudge.ConvertJudge(MineJudgeHelper.InvertStandard(GetJudgeResult()));
+            if (IsExNote)
+            {
+                ReserveExJudgeSe(judge);
+            }
+            else
+            {
+                ReserveTapJudgeSe(judge);
+            }
+            ShotJudgeSound = true;
         }
-        else
-        {
-            ReserveTapJudgeSe(box);
-        }
-
-        traverse.Field("ShotJudgeSound").SetValue(true);
     }
     // 注意：BreakStarNote.SetMulti / SetSlideStar 是非虚方法，无法 override；
     // 地雷双星光效替换由 CustomNoteTypes.BreakStarSetMultiPostfix（Harmony postfix）处理。

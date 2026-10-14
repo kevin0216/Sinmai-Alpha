@@ -66,4 +66,19 @@ public partial class CustomNoteTypes
             }
         }
     }
+
+
+    private static void ResetVisualOverlays()
+    {
+        foreach (VisualOverlay value3 in VisualOverlays.Values)
+        {
+            value3.Restore();
+            if (value3.Render != null)
+            {
+                UnityEngine.Object.Destroy(value3.Render.gameObject);
+            }
+        }
+        VisualOverlays.Clear();
+        VisualOverlayRenderers.Clear();
+    }
 }

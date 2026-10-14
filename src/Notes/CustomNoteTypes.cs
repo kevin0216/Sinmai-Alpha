@@ -1,20 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
 using Manager;
-using MelonLoader;
 using Monitor;
 using Monitor.Game;
-using Process;
 using UnityEngine;
-using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
 
@@ -137,8 +129,6 @@ public partial class CustomNoteTypes
     // Mine note textures loaded from Sinmai-Alpha/CustomNoteTypes.
     private static readonly Dictionary<string, Texture2D> MineTextures = new Dictionary<string, Texture2D>();
     private static bool _mineTexturesLoaded;
-
-
 
     private static readonly Dictionary<string, string> MineToBaseMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -392,4 +382,110 @@ public partial class CustomNoteTypes
     // SlideRoot/StarNote/BreakStarNote 的 InitApplySpeed postfix 与 Mine* 类显式
     // EnsureMineBehaviour 可能对同一对象重复调用，用此字典保证只处理一次。
     private static readonly Dictionary<Component, int> HandledInitializations = new Dictionary<Component, int>();
+
+    [HarmonyPatch]
+    public static class ChartReaderNoteContextPatch
+    {
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            return from m in typeof(NotesReader).GetMethods(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                   where m.Name == "loadNote"
+                   select m;
+        }
+
+        [HarmonyPrepare]
+        public static bool Prepare(MethodBase original)
+        {
+            if (!(original != null))
+            {
+                return TargetMethods().Any();
+            }
+            return true;
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPriority(900)]
+        public static void Prefix(NotesReader __instance, out object __state)
+        {
+            __state = RuntimeCharts.Enter(RuntimeCharts.Reader(__instance));
+        }
+
+        [HarmonyFinalizer]
+        [HarmonyPriority(-100)]
+        public static void Finalizer(object __state)
+        {
+            RuntimeCharts.Exit(__state);
+        }
+    }
+
+    private static bool IsNoteDataInitialize(MethodInfo m)
+    {
+        if (m.Name != "Initialize")
+        {
+            return false;
+        }
+        ParameterInfo[] parameters = m.GetParameters();
+        if (parameters.Length >= 1)
+        {
+            return parameters[0].ParameterType == typeof(NoteData);
+        }
+        return false;
+    }
+
+    [HarmonyPatch]
+    public static class ChartOwnerInitializeContextPatch
+    {
+        public static IEnumerable<MethodBase> TargetMethods()
+        {
+            return from m in FakeOwnerMethods()
+                   where IsNoteDataInitialize(m)
+                   select m;
+        }
+
+        [HarmonyPrepare]
+        public static bool Prepare(MethodBase original)
+        {
+            if (!(original != null))
+            {
+                return TargetMethods().Any();
+            }
+            return true;
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPriority(900)]
+        public static void Prefix(Component __instance, NoteData __0, out object __state)
+        {
+            ChartRuntimeState state;
+            if (__0 != null)
+            {
+                state = RuntimeCharts.BindOwner(__instance, __0);
+            }
+            else if (!RuntimeCharts.TryOwner(__instance, out state))
+            {
+                state = RuntimeMonitor((__instance is NoteBase noteBase) ? noteBase.MonitorId : ((SlideRoot)__instance).MonitorId);
+            }
+            __state = RuntimeCharts.Enter(state);
+        }
+
+        [HarmonyFinalizer]
+        [HarmonyPriority(-100)]
+        public static void Finalizer(object __state)
+        {
+            RuntimeCharts.Exit(__state);
+        }
+    }
+
+    private struct ActivationLeadMemoEntry
+    {
+        public float Lead;
+
+        public float Div;
+
+        public float Result;
+    }
+
+    private static Dictionary<string, int> Ma2RecordFirstId;
+
+    private static Dictionary<string, int> Ma2RecordLastId;
 }

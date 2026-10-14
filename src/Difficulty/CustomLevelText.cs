@@ -1,4 +1,6 @@
-﻿using System;
+using Manager.MaiStudio;
+using SinmaiAlpha.Notes;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -22,15 +24,33 @@ public static partial class ExtraDifficulty
 
     private static ChartFlags CustomLevelFlags(MusicIdentity identity, int difficulty)
     {
-        if (identity == null || identity.Utage || identity.Id <= 0 || identity.Id >= 100000 || difficulty < 0 || difficulty > 4) return null;
-        var music = Singleton<DataManager>.Instance.GetMusic(identity.Id);
-        if (music?.notesData == null || difficulty >= music.notesData.Count) return null;
-        var path = music.notesData[difficulty]?.file?.path;
-        if (string.IsNullOrEmpty(path) || SinmaiAlpha.Notes.ChartFeatureGate.IsA000(path)) return null;
-        var chart = FileSystem.ResolvePath(path);
-        var marker = Path.ChangeExtension(chart, ".ExtraDifficulty.flag");
-        if (!File.Exists(marker) && difficulty == Master) marker = Path.Combine(Path.GetDirectoryName(chart), MarkerFileName);
-        return ReadLevelFlags(marker);
+        // Both marker names opened below live in the chart folder the boot scan found without any
+        // *ExtraDifficulty.flag (same ids, difficulties and folder transform), so the result would be null.
+        if (noThemes)
+        {
+            return null;
+        }
+        if (identity == null || identity.Utage || identity.Id <= 0 || identity.Id >= 100000 || difficulty < 0 || difficulty > 4)
+        {
+            return null;
+        }
+        MusicData music = Singleton<DataManager>.Instance.GetMusic(identity.Id);
+        if (music?.notesData == null || difficulty >= music.notesData.Count)
+        {
+            return null;
+        }
+        string text = music.notesData[difficulty]?.file?.path;
+        if (string.IsNullOrEmpty(text) || ChartFeatureGate.IsA000(text))
+        {
+            return null;
+        }
+        string path = FileSystem.ResolvePath(text);
+        string text2 = System.IO.Path.ChangeExtension(path, ".ExtraDifficulty.flag");
+        if (!File.Exists(text2) && difficulty == 3)
+        {
+            text2 = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), "ExtraDifficulty.flag");
+        }
+        return ReadLevelFlags(text2);
     }
     private static ChartFlags ReadLevelFlags(string marker)
     {
@@ -42,25 +62,45 @@ public static partial class ExtraDifficulty
     }
     private static void BindLevelText(object owner, int difficulty, bool utage, DifficultyTheme theme)
     {
-        var flags = !utage ? CustomLevelFlags(Identity(owner as Component), difficulty) : null;
-        Texture2D texture = null;
-        if (flags?.CustomLevelText == true && !string.IsNullOrWhiteSpace(flags.LevelText))
+        // Without a flag file CustomLevelFlags is null for every chart and LevelLabels never got an entry, so the
+        // loop below would only do failing Removes (plus an Identity walk, a path resolve and a stat per call).
+        if (noThemes)
+        {
+            return;
+        }
+        ChartFlags chartFlags = ((!utage) ? CustomLevelFlags(Identity(owner as Component), difficulty) : null);
+        Texture2D texture2D = null;
+        if (chartFlags != null && chartFlags.CustomLevelText && !string.IsNullOrWhiteSpace(chartFlags.LevelText))
         {
             try
             {
-                var color = NativeLevelColor(difficulty);
-                if (theme != null) ColorUtility.TryParseHtmlString(theme.Color, out color);
-                texture = LevelTextStyle.Get(flags.LevelText, color);
-                if (texture == null && LevelTextWarnings.Add(flags.LevelText))
-                    MelonLogger.Warning("[CustomLevelText] Native Rodin font or rendered glyphs unavailable; keeping native level: " + flags.LevelText);
+                Color color = NativeLevelColor(difficulty);
+                if (theme != null)
+                {
+                    ColorUtility.TryParseHtmlString(theme.Color, out color);
+                }
+                texture2D = LevelTextStyle.Get(chartFlags.LevelText, color);
+                if (texture2D == null && LevelTextWarnings.Add(chartFlags.LevelText))
+                {
+                    MelonLogger.Warning("[CustomLevelText] Native Rodin font or rendered glyphs unavailable; keeping native level: " + chartFlags.LevelText);
+                }
             }
-            catch (Exception e)
-            { if (LevelTextWarnings.Add(flags.LevelText)) MelonLogger.Warning("[CustomLevelText] Keeping native level: " + e.Message); }
+            catch (Exception ex)
+            {
+                if (LevelTextWarnings.Add(chartFlags.LevelText))
+                {
+                    MelonLogger.Warning("[CustomLevelText] Keeping native level: " + ex.Message);
+                }
+            }
         }
-        foreach (var name in new[] { "_digitLevel", "_doubleDigitLevel", "_difficultySingle", "_difficultyDouble", "_singleLevel", "_doubleLevel" })
+        string[] array = new string[6] { "_digitLevel", "_doubleDigitLevel", "_difficultySingle", "_difficultyDouble", "_singleLevel", "_doubleLevel" };
+        foreach (string name in array)
         {
-            var counter = Field<SpriteCounter>(owner, name); if (counter == null) continue;
-            SetLevelLabel(counter, texture);
+            SpriteCounter spriteCounter = Field<SpriteCounter>(owner, name);
+            if (!(spriteCounter == null))
+            {
+                SetLevelLabel(spriteCounter, texture2D);
+            }
         }
     }
     private static Color NativeLevelColor(int difficulty)
@@ -91,34 +131,57 @@ public static partial class ExtraDifficulty
     public static class CustomLevelTexturePatch
     {
         public static void Postfix(SpriteCounter __instance, ref Texture __result)
-        { if (LevelLabels.TryGetValue(__instance, out var label) && label.Texture != null) __result = label.Texture; }
+        {
+            // LevelLabels only gets entries from flag files (BindLevelText), so it is empty while noThemes holds.
+            if (noThemes)
+            {
+                return;
+            }
+            if (LevelLabels.TryGetValue(__instance, out var value) && value.Texture != null)
+            {
+                __result = value.Texture;
+            }
+        }
     }
     [HarmonyPatch(typeof(SpriteCounter), "OnPopulateMesh")]
     public static class CustomLevelMeshPatch
     {
         public static void Postfix(SpriteCounter __instance, VertexHelper vh)
         {
-            if (!LevelLabels.TryGetValue(__instance, out var label) || label.Texture == null || vh.currentVertCount == 0) return;
-            var min = new Vector2(float.MaxValue, float.MaxValue); var max = new Vector2(float.MinValue, float.MinValue);
-            var vertex = new UIVertex(); var color = Color.white;
-            for (var i = 0; i < vh.currentVertCount; i++)
+            // LevelLabels is empty under the gate (noThemes): only flag files (BindLevelText) fill it.
+            if (noThemes || !LevelLabels.TryGetValue(__instance, out var value) || value.Texture == null || vh.currentVertCount == 0)
+            {
+                return;
+            }
+            Vector2 vector = new Vector2(float.MaxValue, float.MaxValue);
+            Vector2 vector2 = new Vector2(float.MinValue, float.MinValue);
+            UIVertex vertex = default;
+            Color color = Color.white;
+            for (int i = 0; i < vh.currentVertCount; i++)
             {
                 vh.PopulateUIVertex(ref vertex, i);
-                min = Vector2.Min(min, vertex.position); max = Vector2.Max(max, vertex.position);
-                if (i == 0) color = vertex.color;
+                vector = Vector2.Min(vector, vertex.position);
+                vector2 = Vector2.Max(vector2, vertex.position);
+                if (i == 0)
+                {
+                    color = vertex.color;
+                }
             }
-            var fit = Mathf.Min((max.x - min.x) / label.Texture.width, (max.y - min.y) / label.Texture.height) * LevelTextStyle.DisplayScale;
-            if (fit <= 0) return;
-            var center = (min + max) * .5f;
-            center.x += (max.x - min.x) * LevelTextStyle.DisplayOffsetX;
-            center.y += (max.y - min.y) * LevelTextStyle.DisplayOffsetY;
-            var half = new Vector2(label.Texture.width, label.Texture.height) * (.5f * fit);
-            vh.Clear();
-            vh.AddVert(new Vector3(center.x - half.x, center.y - half.y), color, new Vector2(0, 0));
-            vh.AddVert(new Vector3(center.x - half.x, center.y + half.y), color, new Vector2(0, 1));
-            vh.AddVert(new Vector3(center.x + half.x, center.y + half.y), color, new Vector2(1, 1));
-            vh.AddVert(new Vector3(center.x + half.x, center.y - half.y), color, new Vector2(1, 0));
-            vh.AddTriangle(0, 1, 2); vh.AddTriangle(2, 3, 0);
+            float num = Mathf.Min((vector2.x - vector.x) / (float)value.Texture.width, (vector2.y - vector.y) / (float)value.Texture.height) * LevelTextStyle.DisplayScale;
+            if (!(num <= 0f))
+            {
+                Vector2 vector3 = (vector + vector2) * 0.5f;
+                vector3.x += (vector2.x - vector.x) * LevelTextStyle.DisplayOffsetX;
+                vector3.y += (vector2.y - vector.y) * LevelTextStyle.DisplayOffsetY;
+                Vector2 vector4 = new Vector2(value.Texture.width, value.Texture.height) * (0.5f * num);
+                vh.Clear();
+                vh.AddVert(new Vector3(vector3.x - vector4.x, vector3.y - vector4.y), color, new Vector2(0f, 0f));
+                vh.AddVert(new Vector3(vector3.x - vector4.x, vector3.y + vector4.y), color, new Vector2(0f, 1f));
+                vh.AddVert(new Vector3(vector3.x + vector4.x, vector3.y + vector4.y), color, new Vector2(1f, 1f));
+                vh.AddVert(new Vector3(vector3.x + vector4.x, vector3.y - vector4.y), color, new Vector2(1f, 0f));
+                vh.AddTriangle(0, 1, 2);
+                vh.AddTriangle(2, 3, 0);
+            }
         }
     }
     // Unity's legacy OS Font exposes no embedded font bytes to TextCore.

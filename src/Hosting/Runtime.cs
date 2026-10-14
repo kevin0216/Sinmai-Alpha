@@ -5,10 +5,8 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
-using HarmonyLib;
 using MelonLoader;
 using UnityEngine;
-using UnityEngine.UI;
 
 [assembly: MelonInfo(typeof(SinmaiAlpha.Plugin), "Sinmai-Alpha", "0.1.6", "SaltNya")]
 [assembly: MelonGame("sega-interactive", "Sinmai")]
@@ -35,6 +33,7 @@ namespace SinmaiAlpha
             try
             {
                 foreach (var root in roots) Apply(root, ref count);
+                Compatibility.LegacyPatchGuard.MarkApplied(settings.ChartFeatures, settings.ExtraDifficulty);
                 MelonLogger.Msg(Notes.ChartWatermark.Credit);
                 MelonLogger.Msg("[Sinmai-Alpha] Ready: " + count + " patch groups; assets=" + Hosting.AssetFiles.Root);
             }
@@ -110,77 +109,6 @@ namespace SinmaiAlpha.Hosting
     public static class GuiSizes
     {
         public static bool SinglePlayer => Settings.Current.SinglePlayer ?? Compatibility.OptionalDisplay.SinglePlayer;
-    }
-}
-
-namespace SinmaiAlpha.Compatibility
-{
-    internal static class OptionalDisplay
-    {
-        private static readonly Dictionary<string, Type> Types = new();
-        static OptionalDisplay()
-        { AppDomain.CurrentDomain.AssemblyLoad += (_, __) => { lock (Types) Types.Clear(); }; }
-        private static Type Find(string name)
-        {
-            lock (Types)
-            {
-                if (Types.TryGetValue(name, out var found)) return found;
-                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                { found = assembly.GetType(name, false); if (found != null) return Types[name] = found; }
-                return Types[name] = null;
-            }
-        }
-        internal static object Read(string type, string member)
-        {
-            var owner = Find(type); if (owner == null) return null;
-            const BindingFlags flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-            return owner.GetProperty(member, flags)?.GetValue(null, null) ?? owner.GetField(member, flags)?.GetValue(null);
-        }
-        internal static bool SinglePlayer => Read("AquaMai.Core.Helpers.GuiSizes", "SinglePlayer") is bool value && value;
-        internal static RawImage DisplayImage(int monitor, bool sub)
-        {
-            var owner = Find("AquaMai.Mods.Utils.ScreenPositionAdjust");
-            return owner?.GetMethod("DisplayImage", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)?.Invoke(null, new object[] { monitor, sub }) as RawImage;
-        }
-    }
-    internal static class SinglePlayer
-    {
-        internal static bool HideSubMonitor => Hosting.Settings.Current.HideSubMonitor || OptionalDisplay.Read("AquaMai.Mods.GameSystem.SinglePlayer", "HideSubMonitor") is bool value && value;
-    }
-    internal static class ScreenPositionAdjust
-    {
-        internal static Camera GameRenderCamera => OptionalDisplay.Read("AquaMai.Mods.Utils.ScreenPositionAdjust", "GameRenderCamera") as Camera;
-        internal static RawImage DisplayImage(int monitor, bool sub) => OptionalDisplay.DisplayImage(monitor, sub);
-    }
-    internal static class PracticeMode
-    {
-        internal static float speed => OptionalDisplay.Read("AquaMai.Mods.UX.PracticeMode.PracticeMode", "speed") is float value ? value : 1f;
-    }
-    internal static class LegacyPatchGuard
-    {
-        private static HarmonyLib.Harmony harmony;
-        private static readonly HashSet<Assembly> Seen = new();
-        internal static bool IsLegacyFeature(Type type)
-        {
-            var name = type?.FullName ?? "";
-            foreach (var root in new[] { "CustomNoteTypes.CustomNoteTypes", "ExtraDifficulty.ExtraDifficulty", "ReviveFinaleVSlide", "TapInHoldFix" })
-                if (name == "AquaMai.Mods.Fancy.GamePlay." + root || name.StartsWith("AquaMai.Mods.Fancy.GamePlay." + root + "+", StringComparison.Ordinal)) return true;
-            return false;
-        }
-        private static bool BeforeLegacyPatch(Type type) => !IsLegacyFeature(type);
-        internal static void Initialize(HarmonyLib.Harmony instance)
-        {
-            harmony = instance;
-            AppDomain.CurrentDomain.AssemblyLoad += (_, args) => Inspect(args.LoadedAssembly);
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies()) Inspect(assembly);
-        }
-        private static void Inspect(Assembly assembly)
-        {
-            if (assembly.GetName().Name != "AquaMai.Core" || !Seen.Add(assembly)) return;
-            var startup = assembly.GetType("AquaMai.Core.Startup", false);
-            var apply = startup?.GetMethod("ApplyPatch", BindingFlags.Public | BindingFlags.Static);
-            if (apply != null) harmony.Patch(apply, prefix: new HarmonyMethod(typeof(LegacyPatchGuard), nameof(BeforeLegacyPatch)));
-        }
     }
 }
 

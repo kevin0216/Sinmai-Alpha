@@ -1,4 +1,3 @@
-using HarmonyLib;
 using Manager;
 using Monitor;
 using UnityEngine;
@@ -27,50 +26,44 @@ public class MineTapNote : TapNote, ISelfJudgingMineNote
 
     protected override bool Judge()
     {
-        // base.Judge 被 MineJudgeInversion transpiler 打过补丁，但对 ISelfJudgingMineNote 放行。
-        var result = base.Judge();
-        if (result)
+        bool flag = base.Judge();
+        if (flag)
         {
             MineJudgeHelper.LogFirstUse();
-            // 标准地雷规则（2026-08-26 用户要求四类统一）：任何有效触碰
-            // （原版 Critical/Perfect/Great/Good/TooFast）-> Miss(TooLate)；没碰到 -> Critical。
-            MineJudgeHelper.SetJudgeResult(this, MineJudgeHelper.InvertStandard(GetJudgeResult()));
+            // The protected NoteBase.JudgeResult field, set directly (was a Traverse write through MineJudgeHelper.SetJudgeResult).
+            JudgeResult = MineJudgeHelper.InvertStandard(GetJudgeResult());
         }
-
-        return result;
+        return flag;
     }
 
     protected override bool JudgeToolate()
     {
-        var result = base.JudgeToolate();
-        if (result)
+        bool flag = base.JudgeToolate();
+        if (flag)
         {
             MineJudgeHelper.LogFirstUse();
-            // 超时未命中：原版存 TooLate -> Critical Perfect（不碰无事）
-            MineJudgeHelper.SetJudgeResult(this, MineJudgeHelper.InvertStandard(GetJudgeResult()));
+            // The protected NoteBase.JudgeResult field, set directly (was a Traverse write through MineJudgeHelper.SetJudgeResult).
+            JudgeResult = MineJudgeHelper.InvertStandard(GetJudgeResult());
         }
-
-        return result;
+        return flag;
     }
 
     protected override void PlayJudgeSe()
     {
-        // base.Judge / JudgeToolate 内部通过虚调用到这里时，JudgeResult 还是原版结果
-        // （反转在 Judge/JudgeToolate 返回后做），所以按反转后的判定播 SE。
-        var traverse = Traverse.Create(this);
-        if (traverse.Field("ShotJudgeSound").GetValue<bool>()) return;
-
-        var box = NoteJudge.ConvertJudge(MineJudgeHelper.InvertStandard(GetJudgeResult()));
-        if (IsExNote)
+        // The protected NoteBase.ShotJudgeSound field, read and set directly (was two Traverse lookups per call).
+        if (!ShotJudgeSound)
         {
-            ReserveExJudgeSe(box);
+            NoteJudge.JudgeBox judge = NoteJudge.ConvertJudge(MineJudgeHelper.InvertStandard(GetJudgeResult()));
+            if (IsExNote)
+            {
+                ReserveExJudgeSe(judge);
+            }
+            else
+            {
+                ReserveTapJudgeSe(judge);
+            }
+            ShotJudgeSound = true;
         }
-        else
-        {
-            ReserveTapJudgeSe(box);
-        }
-
-        traverse.Field("ShotJudgeSound").SetValue(true);
     }
 
     // Unity 消息遮蔽：CreateFrom 里恢复字段前 AddComponent 会触发 Awake，

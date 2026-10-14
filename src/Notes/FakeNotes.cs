@@ -21,9 +21,9 @@ public partial class CustomNoteTypes
         public float EndMsec;
         public int Monitor;
     }
-    private static readonly ConditionalWeakTable<NoteData, FakeMarker> FakeNotes = new();
+    private static ConditionalWeakTable<NoteData, FakeMarker> FakeNotes = new ConditionalWeakTable<NoteData, FakeMarker>();
     private static readonly Dictionary<Component, FakeLease> FakeOwners = new();
-    private static readonly ConditionalWeakTable<Transform, Transform> FakeLaunchers = new();
+    private static ConditionalWeakTable<Transform, Transform> FakeLaunchers = new ConditionalWeakTable<Transform, Transform>();
     private static readonly HashSet<Transform> FakeLauncherTransforms = new();
     private static bool pendingFakeMarker { get => RuntimeCharts.Current.pendingFakeMarker; set => RuntimeCharts.Current.pendingFakeMarker = value; }
     private static bool removedFakeMarker { get => RuntimeCharts.Current.removedFakeMarker; set => RuntimeCharts.Current.removedFakeMarker = value; }
@@ -75,34 +75,51 @@ public partial class CustomNoteTypes
         public static IEnumerable<MethodBase> TargetMethods() => FakeOwnerMethods().Where(m => m.Name == "Initialize"
             && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(NoteData));
 
-        [HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        public static void Postfix(Component __instance, object[] __args)
-        {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
 
-            FakeOwners.Remove(__instance);
-            var note = (NoteData)__args[0];
-            if (!IsFakeNote(note)) return;
-            var fields = Traverse.Create(__instance);
-            var monitor = __instance is NoteBase tap ? tap.MonitorId : ((SlideRoot)__instance).MonitorId;
-            FakeOwners[__instance] = new FakeLease { Note = note, EndMsec = fields.Field("TailMsec").GetValue<float>(), Monitor = monitor };
-            // Share native visuals, never native sibling input queues. D-zone
-            // binding has already placed its launcher at the physical D angle.
-            if (!(__instance is NoteBase)) return;
-            var native = __instance.transform.parent;
-            if (native == null || FakeLauncherTransforms.Contains(native)) return;
-            if (!FakeLaunchers.TryGetValue(native, out var visual) || visual == null)
+
+
+        [HarmonyPostfix]
+        [HarmonyPriority(0)]
+        public static void Postfix(Component __instance, NoteData __0)
+        {
+            if (!FeaturesEnabled(__instance))
             {
-                FakeLaunchers.Remove(native);
-                visual = new GameObject("AquaMai Fake Visual Launcher").transform;
-                visual.SetParent(native.parent, false);
-                visual.localPosition = native.localPosition;
-                visual.localRotation = native.localRotation;
-                visual.localScale = native.localScale;
-                FakeLaunchers.Add(native, visual);
-                FakeLauncherTransforms.Add(visual);
+                return;
             }
-            __instance.transform.SetParent(visual, false);
+            FakeOwners.Remove(__instance);
+            NoteData note = __0;
+            if (!IsFakeNote(note))
+            {
+                return;
+            }
+            Traverse traverse = Traverse.Create(__instance);
+            int monitor = ((__instance is NoteBase noteBase) ? noteBase.MonitorId : ((SlideRoot)__instance).MonitorId);
+            FakeOwners[__instance] = new FakeLease
+            {
+                Note = note,
+                EndMsec = traverse.Field("TailMsec").GetValue<float>(),
+                Monitor = monitor
+            };
+            if (!(__instance is NoteBase))
+            {
+                return;
+            }
+            Transform parent = __instance.transform.parent;
+            if (!(parent == null) && !FakeLauncherTransforms.Contains(parent))
+            {
+                if (!FakeLaunchers.TryGetValue(parent, out var value) || value == null)
+                {
+                    FakeLaunchers.Remove(parent);
+                    value = new GameObject("AquaMai Fake Visual Launcher").transform;
+                    value.SetParent(parent.parent, worldPositionStays: false);
+                    value.localPosition = parent.localPosition;
+                    value.localRotation = parent.localRotation;
+                    value.localScale = parent.localScale;
+                    FakeLaunchers.Add(parent, value);
+                    FakeLauncherTransforms.Add(value);
+                }
+                __instance.transform.SetParent(value, worldPositionStays: false);
+            }
         }
     }
 
@@ -229,16 +246,43 @@ public partial class CustomNoteTypes
     {
         public static void Postfix(GameCtrl __instance)
         {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-            var now = NotesManager.GetCurrentMsec();
-            foreach (var pair in FakeOwners.ToArray())
+            if (!FeaturesEnabled(__instance))
             {
-                if (pair.Key == null) { FakeOwners.Remove(pair.Key); continue; }
-                if (pair.Value.Monitor != __instance.MonitorIndex) continue;
-                if (pair.Key.gameObject.activeSelf && now > pair.Value.EndMsec + 150f)
-                    RetireFake(pair.Key, pair.Value);
-                if (!pair.Key.gameObject.activeSelf) FakeOwners.Remove(pair.Key);
+                return;
+            }
+            float currentMsec = NotesManager.GetCurrentMsec();
+            // Same snapshot as FakeOwners.ToArray() (Dictionary order), taken into a reused list.
+            List<KeyValuePair<Component, FakeLease>> list = FakeLifetimeScratch;
+            list.Clear();
+            foreach (KeyValuePair<Component, FakeLease> fakeOwner in FakeOwners)
+            {
+                list.Add(fakeOwner);
+            }
+            try
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    KeyValuePair<Component, FakeLease> keyValuePair = list[i];
+                    if (keyValuePair.Key == null)
+                    {
+                        FakeOwners.Remove(keyValuePair.Key);
+                    }
+                    else if (keyValuePair.Value.Monitor == __instance.MonitorIndex)
+                    {
+                        if (keyValuePair.Key.gameObject.activeSelf && currentMsec > keyValuePair.Value.EndMsec + 150f)
+                        {
+                            RetireFake(keyValuePair.Key, keyValuePair.Value);
+                        }
+                        if (!keyValuePair.Key.gameObject.activeSelf)
+                        {
+                            FakeOwners.Remove(keyValuePair.Key);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                list.Clear();
             }
         }
     }

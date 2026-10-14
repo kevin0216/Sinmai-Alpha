@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using DB;
 using HarmonyLib;
 using Manager;
 using Monitor;
@@ -21,7 +19,7 @@ public partial class CustomNoteTypes
         internal bool OriginalGaugeEnabled;
         internal float OriginalGaugeAlpha;
     }
-    private static readonly ConditionalWeakTable<TouchNoteB, TouchMotionLease> TouchMotionOwners = new();
+    private static ConditionalWeakTable<TouchNoteB, TouchMotionLease> TouchMotionOwners = new ConditionalWeakTable<TouchNoteB, TouchMotionLease>();
     private static readonly FieldInfo TouchPetals = AccessTools.Field(typeof(TouchNoteB), "ColorsObject");
     private static readonly FieldInfo TouchPositions = AccessTools.Field(typeof(TouchNoteB), "DefaultCorlsPos");
     private static readonly FieldInfo TouchNotice = AccessTools.Field(typeof(TouchNoteB), "NoticeObject");
@@ -59,77 +57,118 @@ public partial class CustomNoteTypes
     }
     private static void RestoreTouchMotion(TouchNoteB owner, bool remove)
     {
-        if (!TouchMotionOwners.TryGetValue(owner, out var lease)) return;
-        if (lease.Applied)
+        if (!TouchMotionOwners.TryGetValue(owner, out var value))
         {
-            var petals = (SpriteRenderer[])TouchPetals.GetValue(owner);
-            var positions = (Vector3[])TouchPositions.GetValue(owner);
-            for (var i = 0; i < petals.Length && i < positions.Length; i++)
-                if (petals[i] != null) petals[i].transform.localPosition = positions[i];
-            if (lease.Gauge != null)
-            {
-                lease.Gauge.enabled = lease.OriginalGaugeEnabled;
-                var color = lease.Gauge.color; color.a = lease.OriginalGaugeAlpha; lease.Gauge.color = color;
-            }
-            var notice = (GameObject)TouchNotice.GetValue(owner);
-            if (notice != null) notice.SetActive(false);
-            lease.Applied = false;
+            return;
         }
-        if (remove) TouchMotionOwners.Remove(owner);
+        if (value.Applied)
+        {
+            SpriteRenderer[] array = TouchPetalsOf(owner);
+            UnityEngine.Vector3[] array2 = TouchPositionsOf(owner);
+            for (int i = 0; i < array.Length && i < array2.Length; i++)
+            {
+                if (array[i] != null)
+                {
+                    array[i].transform.localPosition = array2[i];
+                }
+            }
+            if (value.Gauge != null)
+            {
+                value.Gauge.enabled = value.OriginalGaugeEnabled;
+                Color color = value.Gauge.color;
+                color.a = value.OriginalGaugeAlpha;
+                value.Gauge.color = color;
+            }
+            GameObject gameObject = TouchNoticeOf(owner);
+            if (gameObject != null)
+            {
+                gameObject.SetActive(value: false);
+            }
+            value.Applied = false;
+        }
+        if (remove)
+        {
+            TouchMotionOwners.Remove(owner);
+        }
     }
     private static void ApplyTouchMotion(TouchNoteB owner)
     {
-        if (owner == null || owner.IsEnd()) return;
-        var index = owner.GetNoteIndex();
-        if (!SvScrollPosByNoteIndex.TryGetValue(index, out var target) || !HsMultByNoteIndex.TryGetValue(index, out var hs)) return;
-        var appear = (float)FAppearMsec.GetValue(owner);
-        var nativeMsec = (float)FDefaultMsec.GetValue(owner);
-        var now = NotesManager.GetCurrentMsec();
-        TouchMotionOwners.TryGetValue(owner, out var lease);
-        if (lease == null && !RingVisualActive(index, appear, nativeMsec, SpawnDefaultRadius, now)) return;
-        // Once a note has followed SV, keep its reference alpha memory when SV
-        // returns to 1. Unaffected notes retain the native animation throughout.
-        if (lease == null)
+        if (owner == null || owner.IsEnd())
         {
-            lease = new TouchMotionLease();
-            if (owner is TouchHoldC)
+            return;
+        }
+        int noteIndex = owner.GetNoteIndex();
+        if (!SvScrollPosByNoteIndex.TryGetValue(noteIndex, out var value) || !HsMultByNoteIndex.TryGetValue(noteIndex, out var value2))
+        {
+            return;
+        }
+        float num = AppearMsecOf(owner);
+        float num2 = DefaultMsecOf(owner);
+        float currentMsec = NotesManager.GetCurrentMsec();
+        TouchMotionOwners.TryGetValue(owner, out var value3);
+        if (value3 == null && !RingVisualActive(noteIndex, num, num2, 1.225f, currentMsec))
+        {
+            return;
+        }
+        if (value3 == null)
+        {
+            value3 = new TouchMotionLease();
+            if (owner is TouchHoldC touchHoldC)
             {
-                lease.Gauge = (SpriteRenderer)TouchGauge.GetValue(owner);
-                if (lease.Gauge != null)
-                { lease.OriginalGaugeEnabled = lease.Gauge.enabled; lease.OriginalGaugeAlpha = lease.Gauge.color.a; }
+                value3.Gauge = TouchGaugeOf(touchHoldC);
+                if (value3.Gauge != null)
+                {
+                    value3.OriginalGaugeEnabled = value3.Gauge.enabled;
+                    value3.OriginalGaugeAlpha = value3.Gauge.color.a;
+                }
             }
-            TouchMotionOwners.Add(owner, lease);
+            TouchMotionOwners.Add(owner, value3);
         }
-        if (!float.IsNaN(lease.LastMsec) && now + 1 < lease.LastMsec)
-        { lease.Alpha = 0; lease.GaugeVisible = lease.NoticeVisible = false; }
-        lease.LastMsec = now;
-        var presentation = ScrollVisualTiming.Touch(target, GetNoteScroll(index, now), TouchViewSpeed(nativeMsec, hs), now < appear, lease.Alpha, lease.GaugeVisible);
-        lease.Alpha = presentation.Alpha; lease.GaugeVisible = presentation.GaugeVisible;
-        var petals = (SpriteRenderer[])TouchPetals.GetValue(owner);
-        var positions = (Vector3[])TouchPositions.GetValue(owner);
-        for (var i = 0; i < petals.Length && i < positions.Length; i++)
+        if (!float.IsNaN(value3.LastMsec) && currentMsec + 1f < value3.LastMsec)
         {
-            if (petals[i] == null) continue;
-            // Native sprites have a different pivot from the reference sprites.
-            // Keep native open/closed poses; apply the reference distance curve.
-            petals[i].transform.localPosition = positions[i] * (presentation.Distance / .4f);
-            var color = petals[i].color; color.a = presentation.Alpha; petals[i].color = color;
+            value3.Alpha = 0f;
+            value3.GaugeVisible = (value3.NoticeVisible = false);
         }
-        var point = (SpriteRenderer)RingSprite.GetValue(owner);
-        if (point != null) { var color = point.color; color.a = presentation.Alpha; point.color = color; }
-        if (lease.Gauge != null)
+        value3.LastMsec = currentMsec;
+        ScrollVisualTiming.TouchPresentation touchPresentation = ScrollVisualTiming.Touch(value, GetNoteScroll(noteIndex, currentMsec), TouchViewSpeed(num2, value2), currentMsec < num, value3.Alpha, value3.GaugeVisible);
+        value3.Alpha = touchPresentation.Alpha;
+        value3.GaugeVisible = touchPresentation.GaugeVisible;
+        SpriteRenderer[] array = TouchPetalsOf(owner);
+        UnityEngine.Vector3[] array2 = TouchPositionsOf(owner);
+        for (int i = 0; i < array.Length && i < array2.Length; i++)
         {
-            lease.Gauge.enabled = lease.OriginalGaugeEnabled && presentation.GaugeVisible;
-            var color = lease.Gauge.color; color.a = presentation.Alpha; lease.Gauge.color = color;
-            // GaugeMaterial._Amount, hold duration and release accumulation stay native.
+            if (!(array[i] == null))
+            {
+                array[i].transform.localPosition = array2[i] * (touchPresentation.Distance / 0.4f);
+                Color color = array[i].color;
+                color.a = touchPresentation.Alpha;
+                array[i].color = color;
+            }
         }
-        var noticeObject = (GameObject)TouchNotice.GetValue(owner);
-        if (!(owner is TouchHoldC) && noticeObject != null)
+        SpriteRenderer spriteRenderer = NoteSpriteOf(owner);
+        if (spriteRenderer != null)
         {
-            if (presentation.Timing > -.02f) lease.NoticeVisible = true;
-            noticeObject.SetActive(lease.NoticeVisible && !IsFakeNoteOwner(owner) && ShouldShowMineFeedback(owner));
+            Color color2 = spriteRenderer.color;
+            color2.a = touchPresentation.Alpha;
+            spriteRenderer.color = color2;
         }
-        lease.Applied = true;
+        if (value3.Gauge != null)
+        {
+            value3.Gauge.enabled = value3.OriginalGaugeEnabled && touchPresentation.GaugeVisible;
+            Color color3 = value3.Gauge.color;
+            color3.a = touchPresentation.Alpha;
+            value3.Gauge.color = color3;
+        }
+        GameObject gameObject = TouchNoticeOf(owner);
+        if (!(owner is TouchHoldC) && gameObject != null)
+        {
+            if (touchPresentation.Timing > -0.02f)
+            {
+                value3.NoticeVisible = true;
+            }
+            gameObject.SetActive(value3.NoticeVisible && !IsFakeNoteOwner(owner) && ShouldShowMineFeedback(owner));
+        }
+        value3.Applied = true;
     }
 
     [HarmonyPatch(typeof(TouchNoteB), "Initialize")]
@@ -157,4 +196,11 @@ public partial class CustomNoteTypes
         // Original visual function and NoteCheck execute on the real clock.
         // The postprocess writes only petal positions, alpha and display visibility.
     }
+
+
+    private static readonly List<TouchReserve> TouchReservePruneScratch = new List<TouchReserve>();
+
+    private static readonly List<KeyValuePair<TouchReserve, ReserveVisual>> ReserveVisualRebuildScratch = new List<KeyValuePair<TouchReserve, ReserveVisual>>();
+
+    private static int _touchReservePruneFrame = -1;
 }

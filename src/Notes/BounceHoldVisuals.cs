@@ -1,6 +1,6 @@
+using SinmaiAlpha.ChartVisuals;
 using System;
 using DB;
-using HarmonyLib;
 using MAI2.Util;
 using Manager;
 using Monitor;
@@ -14,98 +14,119 @@ public partial class CustomNoteTypes
     // complete bounce body after Execute/NoteCheck, retaining their input clock.
     private static bool TryBounceHoldPresentation(NoteBase owner)
     {
-        if (owner == null || owner.IsEnd() || !(owner is HoldNote || owner is BreakHoldNote)) return false;
-        var index = owner.GetNoteIndex();
-        if (!BounceDurationByNoteIndex.TryGetValue(index, out var bounce) || bounce <= 0) return false;
-        var fields = Traverse.Create(owner);
-        var noteObject = (GameObject)RingNoteObject.GetValue(owner);
-        if (noteObject == null) return false;
-        var appear = (float)FAppearMsec.GetValue(owner);
-        var tailTime = (float)FTailMsec.GetValue(owner);
-        var now = NotesManager.GetCurrentMsec();
-        var type = SvTypeByNoteIndex.TryGetValue(index, out var noteType) ? noteType : "hold";
-        var settings = RingSettings(index, appear, type);
-        var hs = HsMultByNoteIndex.TryGetValue(index, out var multiplier) ? multiplier : 1f;
-        var duration = (float)FDefaultMsec.GetValue(owner);
-        var speed = (ReferenceMotionByNoteIndex.Contains(index) ? RingViewSpeed(duration) * .001f : SpawnRadiusSpan / Math.Max(duration, .001f)) * hs;
-        var headScroll = GetNoteScroll(index, appear);
-        var tailScroll = GetNoteScroll(index, tailTime);
-        var currentScroll = GetNoteScroll(index, now);
-        var pathDirection = Math.Abs(settings.Destroy - settings.Spawn) < .000001f ? 1f : Math.Sign(settings.Destroy - settings.Spawn);
-        var beforeJudge = now < appear;
-        float headRadius, tailRadius; bool tailVisible;
-        if (beforeJudge)
+        if (owner == null || owner.IsEnd() || (!(owner is HoldNote) && !(owner is BreakHoldNote)))
         {
-            var direction = BounceHoldDirection(index, appear, hs);
-            var progress = 1f + direction * hs * (currentScroll - headScroll) / (bounce * 1000f);
-            var takeoff = BounceHoldTakeoff(index, appear, headScroll, bounce * 1000f, hs * direction);
-            var visible = now >= takeoff && (settings.Once || progress >= -.000001f);
-            SetBounceAlpha(fields, visible ? 1f : 0f);
-            SetBounceChildrenActive(fields, visible);
-            SetBounceGuideActive(fields, visible);
-            if (!visible)
+            return false;
+        }
+        int noteIndex = owner.GetNoteIndex();
+        if (!BounceDurationByNoteIndex.TryGetValue(noteIndex, out var value) || value <= 0f)
+        {
+            return false;
+        }
+        GameObject gameObject = NoteObjectOf(owner);
+        if (gameObject == null)
+        {
+            return false;
+        }
+        float num = AppearMsecOf(owner);
+        float num2 = TailMsecOf(owner);
+        float currentMsec = NotesManager.GetCurrentMsec();
+        string type = (SvTypeByNoteIndex.TryGetValue(noteIndex, out var value2) ? value2 : "hold");
+        RingValue settings = RingSettings(noteIndex, num, type);
+        float num3 = (HsMultByNoteIndex.TryGetValue(noteIndex, out var value3) ? value3 : 1f);
+        float num4 = DefaultMsecOf(owner);
+        float num5 = (ReferenceMotionByNoteIndex.Contains(noteIndex) ? (RingViewSpeed(num4) * 0.001f) : (3.5750003f / Math.Max(num4, 0.001f))) * num3;
+        float noteScroll = GetNoteScroll(noteIndex, num);
+        float noteScroll2 = GetNoteScroll(noteIndex, num2);
+        float noteScroll3 = GetNoteScroll(noteIndex, currentMsec);
+        float num6 = ((Math.Abs(settings.Destroy - settings.Spawn) < 1E-06f) ? 1f : ((float)Math.Sign(settings.Destroy - settings.Spawn)));
+        bool flag = currentMsec < num;
+        float num12;
+        float radius;
+        bool flag3;
+        if (flag)
+        {
+            float num7 = BounceHoldDirection(noteIndex, num, num3);
+            float num8 = 1f + num7 * num3 * (noteScroll3 - noteScroll) / (value * 1000f);
+            float num9 = BounceHoldTakeoff(noteIndex, num, noteScroll, value * 1000f, num3 * num7);
+            bool flag2 = currentMsec >= num9 && (settings.Once || num8 >= -1E-06f);
+            SetBounceAlpha(owner, flag2 ? 1f : 0f);
+            SetBounceChildrenActive(owner, flag2);
+            SetBounceGuideActive(owner, flag2);
+            if (!flag2)
             {
-                var hiddenTail = fields.Field("EndPointObj").GetValue<GameObject>();
-                if (hiddenTail != null) hiddenTail.SetActive(false);
+                GameObject value4 = EndPointOf(owner);
+                if (value4 != null)
+                {
+                    value4.SetActive(value: false);
+                }
                 return true;
             }
-            var fromApex = 2f * progress - 1f;
-            var excursion = (settings.Destroy - settings.Spawn) * (1f - fromApex * fromApex);
-            headRadius = direction < 0 ? settings.Destroy + excursion : settings.Destroy - excursion;
-            var fullLength = pathDirection * speed * (tailScroll - headScroll);
-            var length = Math.Sign(fullLength) * Math.Min(Math.Abs(fullLength), Math.Abs(settings.Destroy - settings.Spawn));
-            tailRadius = headRadius - length;
-            tailVisible = Math.Abs(length) > .001f;
+            float num10 = 2f * num8 - 1f;
+            float num11 = (settings.Destroy - settings.Spawn) * (1f - num10 * num10);
+            num12 = ((num7 < 0f) ? (settings.Destroy + num11) : (settings.Destroy - num11));
+            float value5 = num6 * num5 * (noteScroll2 - noteScroll);
+            float num13 = (float)Math.Sign(value5) * Math.Min(Math.Abs(value5), Math.Abs(settings.Destroy - settings.Spawn));
+            radius = num12 - num13;
+            flag3 = Math.Abs(num13) > 0.001f;
         }
         else
         {
-            SetBounceAlpha(fields, 1f);
-            SetBounceChildrenActive(fields, true);
-            SetBounceGuideActive(fields, true);
-            if (TryRingPresentation(owner, false, out _)) return false;
-            // At the head's original judge time, resume normal tail descent.
-            // The tail has its own SV scroll target and original release time.
-            headRadius = settings.Destroy;
-            var tail = ScrollVisualTiming.Ring(tailScroll, currentScroll, speed, settings.Spawn, settings.Destroy,
-                settings.Once && RingEverCrossed(owner, true, tailScroll, speed, settings, now));
-            tailRadius = tail.Radius;
-            tailVisible = tail.Running;
+            SetBounceAlpha(owner, 1f);
+            SetBounceChildrenActive(owner, active: true);
+            SetBounceGuideActive(owner, active: true);
+            if (TryRingPresentation(owner, tail: false, out var _))
+            {
+                return false;
+            }
+            num12 = settings.Destroy;
+            ScrollVisualTiming.Presentation presentation2 = ScrollVisualTiming.Ring(noteScroll2, noteScroll3, num5, settings.Spawn, settings.Destroy, settings.Once && RingEverCrossed(owner, tail: true, noteScroll2, num5, settings, currentMsec));
+            radius = presentation2.Radius;
+            flag3 = presentation2.Running;
         }
-        var headY = RingNativeY(owner, headRadius);
-        var tailY = RingNativeY(owner, tailRadius);
-        if (beforeJudge)
+        float num14 = RingNativeY(owner, num12);
+        float num15 = RingNativeY(owner, radius);
+        if (flag)
         {
-            var offset = GetNoteSpeedOffsetY(owner, (float)FEndPos.GetValue(owner) - (float)FStartPos.GetValue(owner));
-            headY += offset; tailY += offset;
+            float noteSpeedOffsetY = GetNoteSpeedOffsetY(owner, EndPosOf(owner) - StartPosOf(owner));
+            num14 += noteSpeedOffsetY;
+            num15 += noteSpeedOffsetY;
         }
-        var hasBody = now < tailTime;
-        var position = noteObject.transform.localPosition;
-        position.y = hasBody ? (headY + tailY) * .5f : headY;
-        noteObject.transform.localPosition = position;
-        var nativeSize = Singleton<GamePlayManager>.Instance.GetGameScore(owner.MonitorId).UserOption.NoteSize.GetValue();
-        var orientation = hasBody && headY < tailY ? -1f : 1f;
-        noteObject.transform.localScale = new Vector3(nativeSize, orientation, 0);
-        var sprite = (SpriteRenderer)RingSprite.GetValue(owner);
-        sprite.size = new Vector2(sprite.size.x, (hasBody ? Math.Abs(headY - tailY) : 0) + 140f);
-        var ex = (SpriteRenderer)RingExSprite.GetValue(owner);
-        if (ex != null) ex.size = sprite.size;
-        var effect = fields.Field("EffectSprite").GetValue<SpriteRenderer>();
-        if (effect != null) effect.size = sprite.size;
-        SyncBreakHoldGlow(owner, sprite);
-        var tailObject = fields.Field("EndPointObj").GetValue<GameObject>();
-        if (tailObject != null)
+        bool flag4 = currentMsec < num2;
+        UnityEngine.Vector3 localPosition = gameObject.transform.localPosition;
+        localPosition.y = (flag4 ? ((num14 + num15) * 0.5f) : num14);
+        gameObject.transform.localPosition = localPosition;
+        float value6 = Singleton<GamePlayManager>.Instance.GetGameScore(owner.MonitorId).UserOption.NoteSize.GetValue();
+        float y = ((flag4 && num14 < num15) ? (-1f) : 1f);
+        gameObject.transform.localScale = new UnityEngine.Vector3(value6, y, 0f);
+        SpriteRenderer spriteRenderer = NoteSpriteOf(owner);
+        spriteRenderer.size = new UnityEngine.Vector2(spriteRenderer.size.x, (flag4 ? Math.Abs(num14 - num15) : 0f) + 140f);
+        SpriteRenderer spriteRenderer2 = NoteSpriteExOf(owner);
+        if (spriteRenderer2 != null)
         {
-            tailObject.SetActive(hasBody && tailVisible);
-            var tailPosition = tailObject.transform.localPosition;
-            tailPosition.y = tailY; tailObject.transform.localPosition = tailPosition;
-            tailObject.transform.localScale = Vector3.one;
+            spriteRenderer2.size = spriteRenderer.size;
         }
-        var guide = (NoteGuide)RingGuide.GetValue(owner);
-        if (guide != null)
+        SpriteRenderer value7 = EffectSpriteOf(owner);
+        if (value7 != null)
         {
-            var scale = Math.Abs(headRadius / SpawnJudgeLine);
-            guide.transform.localScale = new Vector3(scale, scale, 1);
-            guide.SetAlpha(1);
+            value7.size = spriteRenderer.size;
+        }
+        SyncBreakHoldGlow(owner, spriteRenderer);
+        GameObject value8 = EndPointOf(owner);
+        if (value8 != null)
+        {
+            value8.SetActive(flag4 & flag3);
+            UnityEngine.Vector3 localPosition2 = value8.transform.localPosition;
+            localPosition2.y = num15;
+            value8.transform.localPosition = localPosition2;
+            value8.transform.localScale = UnityEngine.Vector3.one;
+        }
+        NoteGuide noteGuide = NoteGuideOf(owner);
+        if (noteGuide != null)
+        {
+            float num16 = Math.Abs(num12 / 4.8f);
+            noteGuide.transform.localScale = new UnityEngine.Vector3(num16, num16, 1f);
+            noteGuide.SetAlpha(1f);
         }
         return true;
     }

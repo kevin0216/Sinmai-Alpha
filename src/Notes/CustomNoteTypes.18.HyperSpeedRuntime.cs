@@ -1,20 +1,8 @@
-using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
 using Manager;
-using MelonLoader;
 using Monitor;
-using Monitor.Game;
-using Process;
 using UnityEngine;
-using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
 
@@ -59,16 +47,7 @@ public partial class CustomNoteTypes
      * 把 GetSlidePath 和 GetSlideHitArea 和 GetSlideLength 重定向到我可以控制的函数上, 并且多推几个参数进来
      */
 
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(SlideRoot), "Initialize")]
-    public static void SlideRootInitApplySpeed(object __instance, object[] __args)
-    {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
 
-        var note = FindNoteDataFromArgs(__instance, __args);
-        if (note == null) return;
-        TryApplySpeedToNoteObject(__instance, note);
-    }
 
     public static float MajdataSlideHSpeed(NoteData note)
     {
@@ -79,25 +58,43 @@ public partial class CustomNoteTypes
 
     public static bool MajdataHasSlideSvFor(NoteData note)
     {
-        if (SpeedClass(note).IgnoreSV) return false;
-        var state = RuntimeCharts.Note(note);
-        return state.StreamTypeByNoteIndex.TryGetValue(note.indexNote, out var stream)
-            ? state.SvCurves.ContainsKey(stream) : state.SvCurves.ContainsKey("slide");
+        if (IgnoresSv(note))
+        {
+            return false;
+        }
+        ChartRuntimeState chartRuntimeState = RuntimeCharts.Note(note);
+        if (!chartRuntimeState.StreamTypeByNoteIndex.TryGetValue(note.indexNote, out var value))
+        {
+            return chartRuntimeState.SvCurves.ContainsKey("slide");
+        }
+        return chartRuntimeState.SvCurves.ContainsKey(value);
     }
 
     public static float MajdataSlideProgress(NoteData note, float start, float duration, float now)
     {
-        var previous = RuntimeCharts.Enter(RuntimeCharts.Note(note));
+        object previous = RuntimeCharts.Enter(RuntimeCharts.Note(note));
         try
         {
-            if (duration <= .001f) return 1;
-            if (SpeedClass(note).IgnoreSV) return Mathf.Clamp01((now - start) / duration);
-            if (!StreamTypeByNoteIndex.TryGetValue(note.indexNote, out var stream)) return MajdataSlideProgress(start, duration, now);
-            var origin = SvIntegral(stream, start);
-            var range = SvIntegral(stream, start + duration) - origin;
-            return ScrollVisualTiming.Slide(SvIntegral(stream, Mathf.Clamp(now, start, start + duration)) - origin, range, duration);
+            if (duration <= 0.001f)
+            {
+                return 1f;
+            }
+            if (IgnoresSv(note))
+            {
+                return Mathf.Clamp01((now - start) / duration);
+            }
+            if (!StreamTypeByNoteIndex.TryGetValue(note.indexNote, out var value))
+            {
+                return MajdataSlideProgress(start, duration, now);
+            }
+            float num = SvIntegral(value, start);
+            float num2 = SvIntegral(value, start + duration) - num;
+            return ScrollVisualTiming.Slide(SvIntegral(value, Mathf.Clamp(now, start, start + duration)) - num, num2, duration);
         }
-        finally { RuntimeCharts.Exit(previous); }
+        finally
+        {
+            RuntimeCharts.Exit(previous);
+        }
     }
 
     // Typed-only SV: NULL restores 1, and global SV never affects slide progress.
@@ -128,52 +125,33 @@ public partial class CustomNoteTypes
         return ScrollVisualTiming.Slide(Integral(Mathf.Clamp(now, start, start + duration)) - origin, range, duration);
     }
 
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(StarNote), "Initialize")]
-    public static void StarNoteInitApplySpeed(object __instance, object[] __args)
-    {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
 
-        var note = FindNoteDataFromArgs(__instance, __args);
-        if (note == null) return;
-        TryApplySpeedToNoteObject(__instance, note);
-    }
+
+
+
+
+
 
     [HarmonyPostfix]
-    [HarmonyPatch(typeof(BreakStarNote), "Initialize")]
-    public static void BreakStarNoteInitApplySpeed(object __instance, object[] __args)
+    [HarmonyPatch(typeof(SlideRoot), "Initialize")]
+    public static void SlideRootInitApplySpeed(object __instance, NoteData __0)
     {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-        var note = FindNoteDataFromArgs(__instance, __args);
-        if (note == null) return;
-        TryApplySpeedToNoteObject(__instance, note);
+        if (FeaturesEnabled(__instance))
+        {
+            NoteData noteData = FindNoteDataFromArgs(__instance, __0);
+            if (noteData != null)
+            {
+                TryApplySpeedToNoteObject(__instance, noteData);
+            }
+        }
     }
 
-    private static NoteData FindNoteDataFromArgs(object __instance, object[] __args)
+    private static bool IgnoresSv(NoteData note)
     {
-        if (__args != null)
+        if (VisualNotes.TryGetValue(note, out var value))
         {
-            foreach (var arg in __args)
-            {
-                if (arg is NoteData nd) return nd;
-            }
+            return value.Note.IgnoreSV;
         }
-
-        if (__instance != null)
-        {
-            var traverse = Traverse.Create(__instance);
-            foreach (var fieldName in new[] { "noteData", "_noteData", "NoteData", "data", "_data" })
-            {
-                var field = traverse.Field(fieldName);
-                if (field.FieldExists())
-                {
-                    var data = field.GetValue<NoteData>();
-                    if (data != null) return data;
-                }
-            }
-        }
-
-        return null;
+        return false;
     }
 }

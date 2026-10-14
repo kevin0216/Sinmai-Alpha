@@ -1,5 +1,3 @@
-using HarmonyLib;
-using MAI2.Util;
 using Manager;
 using Monitor;
 using UnityEngine;
@@ -34,20 +32,20 @@ public class TouchStarNoteC : TouchNoteC, ISelfJudgingMineNote
 
     protected override void PlayJudgeSe()
     {
-        var traverse = Traverse.Create(this);
-        if (traverse.Field("ShotJudgeSound").GetValue<bool>()) return;
-
-        var box = NoteJudge.ConvertJudge(GetJudgeResult());
-        if (IsExNote)
+        // The protected NoteBase.ShotJudgeSound field, read and set directly (was two Traverse lookups per call).
+        if (!ShotJudgeSound)
         {
-            ReserveExJudgeSe(box);
+            NoteJudge.JudgeBox judge = NoteJudge.ConvertJudge(GetJudgeResult());
+            if (IsExNote)
+            {
+                ReserveExJudgeSe(judge);
+            }
+            else
+            {
+                ReserveTapJudgeSe(judge);
+            }
+            ShotJudgeSound = true;
         }
-        else
-        {
-            ReserveTapJudgeSe(box);
-        }
-
-        traverse.Field("ShotJudgeSound").SetValue(true);
     }
 
     private new void Awake()

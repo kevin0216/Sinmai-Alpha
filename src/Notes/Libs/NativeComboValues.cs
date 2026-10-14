@@ -17,45 +17,10 @@ public sealed class NativeComboValues
 
     public static NativeComboValues CaptureSession(GameScoreList score, GameScoreList partner)
     {
-        if (score == null || !score.IsEnable) return new NativeComboValues();
-        var maximum = score.ScoreTotal._allPerfectScore;
-        if (!score.SessionInfo.isUtageCoop || partner == null || !partner.IsEnable) partner = null;
-        else maximum += partner.ScoreTotal._allPerfectScore;
-        return CaptureWithPartner(score, maximum, partner, score.SessionInfo.isUtageCoop ? 200 : 100);
+        return CaptureSession(score, partner, includeLoss: true);
     }
-    private static NativeComboValues CaptureWithPartner(GameScoreList score, uint maximumBaseScore, GameScoreList partner, float fullRate = 100)
-    {
-        var value = new NativeComboValues();
-        if (score == null || !score.IsEnable) return value;
-        value.Combo = score.Combo;
-        value.DeluxeScore = score.GetDeluxeScoreAll();
-        value.Score = score.TotalScore;
-        value.AchievementDeluxe = score.GetAchivement();
-        value.AchievementDownDeluxe = score.GetDecAchivement();
-        decimal loss = 0, bonus = 0;
-        ReadLoss(score, ref loss, ref bonus);
-        if (partner != null) ReadLoss(partner, ref loss, ref bonus);
-        if (maximumBaseScore != 0)
-        {
-            // Keep actual native Break awards. Classic display percentages
-            // use the base-score denominator and do not rewrite game results.
-            value.AchievementClassic = value.Score * 100m / maximumBaseScore;
-            value.AchievementDownClassic = (maximumBaseScore - loss + bonus) * 100m / maximumBaseScore;
-            value.NormalizedScore = Normalize(maximumBaseScore, value.AchievementDeluxe, fullRate);
-            value.NormalizedDownScore = Normalize(maximumBaseScore, value.AchievementDownDeluxe, fullRate);
-        }
-        return value;
-    }
-    private static void ReadLoss(GameScoreList score, ref decimal loss, ref decimal bonus)
-    {
-        for (var index = 0; index < score.GetScoreLength(); index++)
-        {
-            var result = score.GetScoreAt(index);
-            if (!result.Judged || result.Type == NoteScore.EScoreType.End) continue;
-            loss += (decimal)result.TheoryScore - result.Score;
-            bonus += result.ScoreBonus;
-        }
-    }
+
+
     private static long Normalize(uint maximum, decimal achievement, float fullRate) =>
         (long)Math.Round((float)maximum * ((float)achievement / fullRate) / 5f) * 5;
 
@@ -83,6 +48,78 @@ public sealed class NativeComboValues
             case 11: return AchievementDeluxe;
             case 12: return AchievementDownDeluxe;
             default: return 0;
+        }
+    }
+
+
+    public static NativeComboValues CaptureSession(GameScoreList score, GameScoreList partner, bool includeLoss)
+    {
+        if (score == null || !score.IsEnable)
+        {
+            return new NativeComboValues();
+        }
+        uint num = score.ScoreTotal._allPerfectScore;
+        if (!score.SessionInfo.isUtageCoop || partner == null || !partner.IsEnable)
+        {
+            partner = null;
+        }
+        else
+        {
+            num += partner.ScoreTotal._allPerfectScore;
+        }
+        return CaptureWithPartner(score, num, partner, score.SessionInfo.isUtageCoop ? 200 : 100, includeLoss);
+    }
+
+    private static NativeComboValues CaptureWithPartner(GameScoreList score, uint maximumBaseScore, GameScoreList partner, float fullRate = 100f, bool includeLoss = true)
+    {
+        NativeComboValues nativeComboValues = new NativeComboValues();
+        if (score == null || !score.IsEnable)
+        {
+            return nativeComboValues;
+        }
+        nativeComboValues.Combo = score.Combo;
+        nativeComboValues.DeluxeScore = score.GetDeluxeScoreAll();
+        nativeComboValues.Score = score.TotalScore;
+        nativeComboValues.AchievementDeluxe = score.GetAchivement();
+        nativeComboValues.AchievementDownDeluxe = score.GetDecAchivement();
+        long num = 0L;
+        long num2 = 0L;
+        if (includeLoss)
+        {
+            ReadLoss(score, ref num, ref num2);
+            if (partner != null)
+            {
+                ReadLoss(partner, ref num, ref num2);
+            }
+        }
+        if (maximumBaseScore != 0)
+        {
+            nativeComboValues.AchievementClassic = (decimal)nativeComboValues.Score * 100m / (decimal)maximumBaseScore;
+            if (includeLoss)
+            {
+                // The decimal running sums this replaces only ever added scale-0 integers, far inside both decimal's
+                // and long's range, so converting the exact long sums gives the same decimal operands.
+                decimal loss = num;
+                decimal bonus = num2;
+                nativeComboValues.AchievementDownClassic = ((decimal)maximumBaseScore - loss + bonus) * 100m / (decimal)maximumBaseScore;
+            }
+            nativeComboValues.NormalizedScore = Normalize(maximumBaseScore, nativeComboValues.AchievementDeluxe, fullRate);
+            nativeComboValues.NormalizedDownScore = Normalize(maximumBaseScore, nativeComboValues.AchievementDownDeluxe, fullRate);
+        }
+        return nativeComboValues;
+    }
+
+    private static void ReadLoss(GameScoreList score, ref long loss, ref long bonus)
+    {
+        int scoreLength = score.GetScoreLength();
+        for (int i = 0; i < scoreLength; i++)
+        {
+            JudgeResultSt scoreAt = score.GetScoreAt(i);
+            if (scoreAt.Judged && scoreAt.Type != NoteScore.EScoreType.End)
+            {
+                loss += (long)scoreAt.TheoryScore - (long)scoreAt.Score;
+                bonus += scoreAt.ScoreBonus;
+            }
         }
     }
 }

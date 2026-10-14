@@ -35,7 +35,7 @@ public partial class CustomNoteTypes
         public float PausedTime;
     }
     private static List<(int Bar, int Grid, string Kind, string Text)> PendingMedia => RuntimeCharts.Current.PendingMedia;
-    private static readonly ConditionalWeakTable<NotesReader, MediaTimeline> MediaTimelines = new();
+    private static ConditionalWeakTable<NotesReader, MediaTimeline> MediaTimelines = new();
     private static readonly Dictionary<GameCtrl, MediaSession> MediaSessions = new();
     private static bool NativeMediaPaused;
 
@@ -91,48 +91,88 @@ public partial class CustomNoteTypes
     }
     public static void EnsureMediaPresentation(GameCtrl ctrl)
     {
-        if (ctrl == null) return;
-        var reader = NotesManager.Instance(ctrl.MonitorIndex).getReader();
-        if (GuiSizes.SinglePlayer && ctrl.MonitorIndex != 0 || !MediaTimelines.TryGetValue(reader, out var timeline) || timeline.Events.Count == 0 || string.IsNullOrEmpty(timeline.Root))
-        { ReleaseMedia(ctrl); RefreshMediaAudioOwners(); return; }
-        if (MediaSessions.TryGetValue(ctrl, out var current) && current.Reader == reader && current.Timeline == timeline) return;
-        ReleaseMedia(ctrl);
-        var movie = Traverse.Create(ctrl).Field("_movieSprite").GetValue<SpriteRenderer>();
-        var hasOverlay = timeline.Events.Any(e => e.kind == "pvOverlay");
-        if (hasOverlay && movie == null) return;
-        var go = new GameObject("ChartMedia_" + ctrl.MonitorIndex);
-        go.transform.SetParent(ctrl.transform, false);
-        var controller = go.AddComponent<ChartMediaTimelineController>();
-        controller.Configure(timeline.Events, timeline.Root, new NativeMediaClock { Monitor = ctrl.MonitorIndex }, false, hasOverlay ? new NativeMediaBackground(movie) : null);
-        controller.SetBackgroundFitMode(0);
-        controller.SetAudioVolume(1);
-        MediaSessions[ctrl] = new MediaSession { Reader = reader, Timeline = timeline, Controller = controller };
-        RefreshMediaAudioOwners();
+        if (ctrl == null)
+        {
+            return;
+        }
+        NotesReader reader = NotesManager.Instance(ctrl.MonitorIndex).getReader();
+        MediaSession value2;
+        if ((GuiSizes.SinglePlayer && ctrl.MonitorIndex != 0) || !MediaTimelines.TryGetValue(reader, out var value) || value.Events.Count == 0 || string.IsNullOrEmpty(value.Root))
+        {
+            ReleaseMedia(ctrl);
+            // Over an empty MediaSessions the LINQ pipeline iterates nothing; skip building it every frame.
+            if (MediaSessions.Count != 0)
+            {
+                RefreshMediaAudioOwners();
+            }
+        }
+        else if (!MediaSessions.TryGetValue(ctrl, out value2) || value2.Reader != reader || value2.Timeline != value)
+        {
+            ReleaseMedia(ctrl);
+            SpriteRenderer value3 = Traverse.Create(ctrl).Field("_movieSprite").GetValue<SpriteRenderer>();
+            bool flag = value.Events.Any((MediaChange e) => e.kind == "pvOverlay");
+            if (!flag || !(value3 == null))
+            {
+                GameObject gameObject = new GameObject("ChartMedia_" + ctrl.MonitorIndex);
+                gameObject.transform.SetParent(ctrl.transform, worldPositionStays: false);
+                ChartMediaTimelineController chartMediaTimelineController = gameObject.AddComponent<ChartMediaTimelineController>();
+                chartMediaTimelineController.Configure(value.Events, value.Root, new NativeMediaClock
+                {
+                    Monitor = ctrl.MonitorIndex
+                }, isRecording: false, flag ? new NativeMediaBackground(value3) : null);
+                chartMediaTimelineController.SetBackgroundFitMode(0);
+                chartMediaTimelineController.SetAudioVolume(1f);
+                MediaSessions[ctrl] = new MediaSession
+                {
+                    Reader = reader,
+                    Timeline = value,
+                    Controller = chartMediaTimelineController
+                };
+                RefreshMediaAudioOwners();
+            }
+        }
     }
     public static void ApplyMediaPresentation(GameMonitor monitor)
     {
-        var ctrl = Traverse.Create(monitor).Field("GameController").GetValue<GameCtrl>();
-        EnsureMediaPresentation(ctrl);
-        if (ctrl == null || !MediaSessions.TryGetValue(ctrl, out var session) || session.Controller == null) return;
-        var playing = NotesManager.Instance(ctrl.MonitorIndex).IsPlaying();
-        var now = NotesManager.GetCurrentMsec() / 1000f;
-        if (!playing)
+        GameCtrl value = ControllerOf(monitor);
+        EnsureMediaPresentation(value);
+        if (value == null || !MediaSessions.TryGetValue(value, out var value2) || value2.Controller == null)
         {
-            if (session.Started) session.Controller.SetPlaybackActive(false);
-            session.Started = session.Paused = false;
             return;
         }
-        if (!session.Started) { session.Controller.SetPlaybackActive(true); session.Started = true; }
+        bool flag = NotesManager.Instance(value.MonitorIndex).IsPlaying();
+        float num = NotesManager.GetCurrentMsec() / 1000f;
+        if (!flag)
+        {
+            if (value2.Started)
+            {
+                value2.Controller.SetPlaybackActive(active: false);
+            }
+            value2.Started = (value2.Paused = false);
+            return;
+        }
+        if (!value2.Started)
+        {
+            value2.Controller.SetPlaybackActive(active: true);
+            value2.Started = true;
+        }
         if (NativeMediaPaused)
         {
-            if (!session.Paused || now != session.PausedTime) session.Controller.SetPausedTimelineTime(now);
-            session.Paused = true; session.PausedTime = now;
+            if (!value2.Paused || num != value2.PausedTime)
+            {
+                value2.Controller.SetPausedTimelineTime(num);
+            }
+            value2.Paused = true;
+            value2.PausedTime = num;
         }
         else
         {
-            if (session.Paused) session.Controller.ContinuePlayback();
-            session.Paused = false;
-            session.Controller.Tick();
+            if (value2.Paused)
+            {
+                value2.Controller.ContinuePlayback();
+            }
+            value2.Paused = false;
+            value2.Controller.Tick();
         }
     }
     [HarmonyPatch(typeof(NotesReader), "loadMa2Main")]

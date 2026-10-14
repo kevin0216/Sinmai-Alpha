@@ -1,19 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
 using DB;
 using HarmonyLib;
 using MAI2.Util;
 using Manager;
 using MelonLoader;
-using Monitor;
-using Monitor.Game;
-using Process;
-using UnityEngine;
 using SinmaiAlpha.Notes.Libs;
 
 namespace SinmaiAlpha.Notes;
@@ -138,107 +131,55 @@ public partial class CustomNoteTypes
     [HarmonyPatch(typeof(Ma2fileRecordID), "findID")]
     public static bool FindIDPrefix(string enumName, ref Ma2fileRecordID.Def __result)
     {
-        if (!FeaturesEnabled()) { __result = ChartFeatureGate.FindNativeRecord(enumName); return false; }
-
-        // NOTE: Do NOT reset _pendingMineForCurrentLoad / _pendingTouchBreakForCurrentLoad here.
-        // findID can be called multiple times before loadNote; resetting here would lose the flag.
-
-        string baseName = null;
-        var isMine = false;
-        var isTouchBreak = false;
-        var isTouchStar = false;
-
-        if (MineToBaseMap.TryGetValue(enumName, out baseName))
+        if (!FeaturesEnabled())
         {
-            isMine = true;
-        }
-        else if (enumName == "BRTTP")
-        {
-            // 绝赞 touch（非地雷，命中强制 CP）。
-            baseName = "NMTTP";
-            isTouchBreak = true;
-        }
-        else if (enumName == "BRTHO")
-        {
-            // 绝赞 touchhold（非地雷，命中强制 CP）。
-            baseName = "NMTHO";
-            isTouchBreak = true;
-        }
-        else if (enumName == "MBTTP")
-        {
-            // 地雷绝赞 touch。
-            baseName = "NMTTP";
-            isMine = true;
-            isTouchBreak = true;
-        }
-        else if (enumName == "MBTHO")
-        {
-            // 地雷绝赞 touchhold。
-            baseName = "NMTHO";
-            isMine = true;
-            isTouchBreak = true;
-        }
-        else if (enumName == "NMSTP")
-        {
-            // TouchStar：逻辑同普通 touch，贴图五瓣星（touch_star / touch_hit_star）。
-            baseName = "NMTTP";
-            isTouchStar = true;
-        }
-        else if (enumName == "BRSTP")
-        {
-            // Break TouchStar：逻辑同绝赞 touch（命中强制 CP），贴图 touch_star_break。
-            baseName = "NMTTP";
-            isTouchBreak = true;
-            isTouchStar = true;
-        }
-        else if (enumName == "MNSTP")
-        {
-            // 地雷 TouchStar：逻辑同地雷 touch（命中反转成 Miss），贴图 touch_star_mine 五瓣星。
-            baseName = "NMTTP";
-            isMine = true;
-            isTouchStar = true;
-        }
-
-        if (baseName != null)
-        {
-            for (var i = 0; i < TotalMa2RecordCount; i++)
-            {
-                var item = Ma2FileRecordData.GetValue(i);
-                if (Traverse.Create(item).Field<string>("enumName").Value == baseName)
-                {
-                    __result = (Ma2fileRecordID.Def)i;
-                    if (AllNoteTypeNames.Contains(enumName))
-                    {
-                        PendingMineFlags.Enqueue(isMine);
-                        PendingTouchBreakFlags.Enqueue(isTouchBreak);
-                        PendingTouchStarFlags.Enqueue(isTouchStar);
-                    }
-                    return false;
-                }
-            }
-
-            MelonLogger.Error($"[CustomNoteType] findID cannot find base type {baseName} for {enumName}");
+            __result = ChartFeatureGate.FindNativeRecord(enumName);
             return false;
         }
-
-        // Normal lookup (including custom slide types like NMSSS).
-        __result = Ma2fileRecordID.Def.Invalid;
-        for (var i = 0; i < TotalMa2RecordCount; i++)
+        // The Pending*Flags queues this used to fill per note line have no reader anywhere.
+        string value = null;
+        if (!MineToBaseMap.TryGetValue(enumName, out value))
         {
-            var item = Ma2FileRecordData.GetValue(i);
-            if (Traverse.Create(item).Field<string>("enumName").Value == enumName)
+            switch (enumName)
             {
-                __result = (Ma2fileRecordID.Def)i;
+                case "BRTTP":
+                    value = "NMTTP";
+                    break;
+                case "BRTHO":
+                    value = "NMTHO";
+                    break;
+                case "MBTTP":
+                    value = "NMTTP";
+                    break;
+                case "MBTHO":
+                    value = "NMTHO";
+                    break;
+                case "NMSTP":
+                    value = "NMTTP";
+                    break;
+                case "BRSTP":
+                    value = "NMTTP";
+                    break;
+                case "MNSTP":
+                    value = "NMTTP";
+                    break;
             }
         }
-
-        if (AllNoteTypeNames.Contains(enumName))
+        if (value != null)
         {
-            PendingMineFlags.Enqueue(false);
-            PendingTouchBreakFlags.Enqueue(false);
-            PendingTouchStarFlags.Enqueue(false);
+            if (Ma2RecordFirstId.TryGetValue(value, out var value2))
+            {
+                __result = (Ma2fileRecordID.Def)value2;
+                return false;
+            }
+            MelonLogger.Error("[CustomNoteType] findID cannot find base type " + value + " for " + enumName);
+            return false;
         }
-
+        __result = Ma2fileRecordID.Def.Invalid;
+        if (Ma2RecordLastId.TryGetValue(enumName, out var value3))
+        {
+            __result = (Ma2fileRecordID.Def)value3;
+        }
         return false;
     }
 
@@ -445,5 +386,30 @@ public partial class CustomNoteTypes
         }
         __result = flag;
         return false;
+    }
+
+
+    private static void BuildMa2RecordIds(System.Type recordType)
+    {
+        Dictionary<string, int> dictionary = new Dictionary<string, int>(StringComparer.Ordinal);
+        Dictionary<string, int> dictionary2 = new Dictionary<string, int>(StringComparer.Ordinal);
+        FieldInfo field = recordType.GetField("enumName", AccessTools.all);
+        if (field != null)
+        {
+            for (int i = 0; i < TotalMa2RecordCount; i++)
+            {
+                object value = Ma2FileRecordData.GetValue(i);
+                if (value != null && field.GetValue(value) is string text)
+                {
+                    if (!dictionary.ContainsKey(text))
+                    {
+                        dictionary[text] = i;
+                    }
+                    dictionary2[text] = i;
+                }
+            }
+        }
+        Ma2RecordFirstId = dictionary;
+        Ma2RecordLastId = dictionary2;
     }
 }

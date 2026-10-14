@@ -277,97 +277,134 @@ public readonly struct NoiseZoneEvent
     public NoiseZoneEvent(int sensor, double start, double duration, double lead, NoiseControls controls = null)
     { Sensor = sensor; Start = start; End = start + Math.Max(1.0 / 60.0, duration); WarningStart = start - Math.Max(0.001, lead); NativeLead = lead; Controls = controls; }
 }
-public sealed class NoiseZoneTimeline
-{
+    public sealed class NoiseZoneTimeline
+    {
 	private readonly List<NoiseZoneEvent> events = new List<NoiseZoneEvent>();
 
 	private readonly List<NoiseZoneEvent>[] spans = new List<NoiseZoneEvent>[33];
 
-	public void Configure(IEnumerable<NoiseZoneEvent> source)
-	{
-		events.Clear();
-		if (source != null)
-		{
-			events.AddRange(source);
-		}
-		events.Sort(delegate(NoiseZoneEvent a, NoiseZoneEvent b)
-		{
-			double warningStart = a.WarningStart;
-			return warningStart.CompareTo(b.WarningStart);
-		});
-		for (int num = 0; num < spans.Length; num++)
-		{
-			List<NoiseZoneEvent>[] array = spans;
-			int num2 = num;
-			if (array[num2] == null)
-			{
-				array[num2] = new List<NoiseZoneEvent>();
-			}
-			spans[num].Clear();
-			List<NoiseZoneEvent> list = new List<NoiseZoneEvent>();
-			foreach (NoiseZoneEvent @event in events)
-			{
-				if (@event.Sensor == num)
-				{
-					list.Add(@event);
-				}
-			}
-			list.Sort(delegate(NoiseZoneEvent a, NoiseZoneEvent b)
-			{
-				double start = a.Start;
-				return start.CompareTo(b.Start);
-			});
-			foreach (NoiseZoneEvent item in list)
-			{
-				if (spans[num].Count == 0 || spans[num][spans[num].Count - 1].End < item.Start)
-				{
-					spans[num].Add(item);
-					continue;
-				}
-				NoiseZoneEvent noiseZoneEvent = spans[num][spans[num].Count - 1];
-				spans[num][spans[num].Count - 1] = new NoiseZoneEvent(num, noiseZoneEvent.Start, Math.Max(noiseZoneEvent.End, item.End) - noiseZoneEvent.Start, noiseZoneEvent.Start - noiseZoneEvent.WarningStart);
-			}
-		}
-	}
+        public void Configure(IEnumerable<NoiseZoneEvent> source)
+        {
+            events.Clear();
+            if (source != null)
+            {
+                events.AddRange(source);
+            }
+            events.Sort((NoiseZoneEvent a, NoiseZoneEvent b) => a.WarningStart.CompareTo(b.WarningStart));
+            BuildLiveEnd();
+            double[][] array2 = null;
+            double[][] array3 = null;
+            if (events.Count > 0)
+            {
+                array2 = new double[spans.Length][];
+                array3 = new double[spans.Length][];
+            }
+            for (int num = 0; num < spans.Length; num++)
+            {
+                List<NoiseZoneEvent>[] array = spans;
+                int num2 = num;
+                if (array[num2] == null)
+                {
+                    array[num2] = new List<NoiseZoneEvent>();
+                }
+                spans[num].Clear();
+                List<NoiseZoneEvent> list = new List<NoiseZoneEvent>();
+                foreach (NoiseZoneEvent @event in events)
+                {
+                    if (@event.Sensor == num)
+                    {
+                        list.Add(@event);
+                    }
+                }
+                list.Sort((NoiseZoneEvent a, NoiseZoneEvent b) => a.Start.CompareTo(b.Start));
+                if (array2 != null)
+                {
+                    BuildBlocks(list, out array2[num], out array3[num]);
+                }
+                foreach (NoiseZoneEvent item in list)
+                {
+                    if (spans[num].Count == 0 || spans[num][spans[num].Count - 1].End < item.Start)
+                    {
+                        spans[num].Add(item);
+                        continue;
+                    }
+                    NoiseZoneEvent noiseZoneEvent = spans[num][spans[num].Count - 1];
+                    spans[num][spans[num].Count - 1] = new NoiseZoneEvent(num, noiseZoneEvent.Start, Math.Max(noiseZoneEvent.End, item.End) - noiseZoneEvent.Start, noiseZoneEvent.Start - noiseZoneEvent.WarningStart);
+                }
+            }
+            blockStarts = array2;
+            blockEnds = array3;
+        }
 
-	public bool IsBlocked(int sensor, double time)
-	{
-		foreach (NoiseZoneEvent @event in events)
-		{
-			if (@event.WarningStart > time)
-			{
-				break;
-			}
-			if (@event.Sensor == sensor && time >= @event.Start && time < @event.End)
-			{
-				return true;
-			}
-		}
-		return false;
-	}
+        public bool IsBlocked(int sensor, double time)
+        {
+            double[][] array = blockStarts;
+            if (array != null && (uint)sensor < (uint)array.Length)
+            {
+                double[] array2 = array[sensor];
+                if (array2 != null)
+                {
+                    int num = 0;
+                    int num2 = array2.Length - 1;
+                    int num3 = -1;
+                    while (num <= num2)
+                    {
+                        int num4 = num + num2 >> 1;
+                        if (array2[num4] <= time)
+                        {
+                            num3 = num4;
+                            num = num4 + 1;
+                        }
+                        else
+                        {
+                            num2 = num4 - 1;
+                        }
+                    }
+                    if (num3 >= 0)
+                    {
+                        return time < blockEnds[sensor][num3];
+                    }
+                    return false;
+                }
+            }
+            for (int i = FirstLive(time); i < events.Count; i++)
+            {
+                NoiseZoneEvent @event = events[i];
+                if (@event.WarningStart > time)
+                {
+                    break;
+                }
+                if (@event.Sensor == sensor && time >= @event.Start && time < @event.End)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
-	public void Evaluate(double time, float[] warnings, bool[] active)
-	{
-		Array.Clear(warnings, 0, warnings.Length);
-		Array.Clear(active, 0, active.Length);
-		foreach (NoiseZoneEvent @event in events)
-		{
-			if (@event.WarningStart > time)
-			{
-				break;
-			}
-			if (@event.Sensor >= 0 && @event.Sensor < active.Length && !(time >= @event.End))
-			{
-				if (time >= @event.Start)
-				{
-					active[@event.Sensor] = true;
-					continue;
-				}
-				double num = (time - @event.WarningStart) / (@event.Start - @event.WarningStart);
-				warnings[@event.Sensor] = Math.Max(warnings[@event.Sensor], (float)(1.0 - 0.7 * num));
-			}
-		}
-	}
+        public void Evaluate(double time, float[] warnings, bool[] active)
+        {
+            Array.Clear(warnings, 0, warnings.Length);
+            Array.Clear(active, 0, active.Length);
+            for (int i = FirstLive(time); i < events.Count; i++)
+            {
+                NoiseZoneEvent @event = events[i];
+                if (@event.WarningStart > time)
+                {
+                    break;
+                }
+                if (@event.Sensor >= 0 && @event.Sensor < active.Length && !(time >= @event.End))
+                {
+                    if (time >= @event.Start)
+                    {
+                        active[@event.Sensor] = true;
+                        continue;
+                    }
+                    double num = (time - @event.WarningStart) / (@event.Start - @event.WarningStart);
+                    warnings[@event.Sensor] = Math.Max(warnings[@event.Sensor], (float)(1.0 - 0.7 * num));
+                }
+            }
+        }
 
 	public bool TryGetActiveSpan(int sensor, double time, out double start, out double end)
 	{
@@ -441,25 +478,26 @@ public sealed class NoiseZoneTimeline
 		return true;
 	}
 
-	public float WarningShine(int sensor, double time)
-	{
-		if (IsBlocked(sensor, time))
-		{
-			return 0f;
-		}
-		foreach (NoiseZoneEvent @event in events)
-		{
-			if (@event.WarningStart > time)
-			{
-				break;
-			}
-			if (@event.Sensor == sensor && time >= Math.Max(@event.WarningStart, @event.Start - 0.5) && time < @event.Start)
-			{
-				return (float)(0.12 * (1.0 + 0.5 * Math.Sin(time * 37.9)));
-			}
-		}
-		return 0f;
-	}
+        public float WarningShine(int sensor, double time)
+        {
+            if (IsBlocked(sensor, time))
+            {
+                return 0f;
+            }
+            for (int i = FirstLive(time); i < events.Count; i++)
+            {
+                NoiseZoneEvent @event = events[i];
+                if (@event.WarningStart > time)
+                {
+                    break;
+                }
+                if (@event.Sensor == sensor && time >= Math.Max(@event.WarningStart, @event.Start - 0.5) && time < @event.Start)
+                {
+                    return (float)(0.12 * (1.0 + 0.5 * Math.Sin(time * 37.9)));
+                }
+            }
+            return 0f;
+        }
 
 	public static int SensorIndex(char area, int position)
 	{
@@ -494,5 +532,157 @@ public sealed class NoiseZoneTimeline
 		}
 		return -1;
 	}
-}
+
+
+        private static readonly double[] NoValues = new double[0];
+
+        private double[] liveEnd = NoValues;
+
+        private double[][] blockStarts;
+
+        private double[][] blockEnds;
+
+        private void BuildLiveEnd()
+        {
+            if (events.Count == 0)
+            {
+                liveEnd = NoValues;
+                return;
+            }
+            double[] array = new double[events.Count];
+            double num = double.NegativeInfinity;
+            for (int i = 0; i < events.Count; i++)
+            {
+                double num2 = events[i].End;
+                if (double.IsNaN(num2))
+                {
+                    num2 = double.PositiveInfinity;
+                }
+                if (num2 > num)
+                {
+                    num = num2;
+                }
+                array[i] = num;
+            }
+            liveEnd = array;
+        }
+
+        private static void BuildBlocks(List<NoiseZoneEvent> list, out double[] starts, out double[] ends)
+        {
+            starts = null;
+            ends = null;
+            if (list.Count == 0)
+            {
+                starts = NoValues;
+                ends = NoValues;
+                return;
+            }
+            int num = 0;
+            double num2 = 0.0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                NoiseZoneEvent noiseZoneEvent = list[i];
+                if (double.IsNaN(noiseZoneEvent.Start) || double.IsInfinity(noiseZoneEvent.Start) || double.IsNaN(noiseZoneEvent.End) || double.IsInfinity(noiseZoneEvent.End))
+                {
+                    return;
+                }
+                if (num == 0 || noiseZoneEvent.Start > num2)
+                {
+                    num++;
+                    num2 = noiseZoneEvent.End;
+                }
+                else if (noiseZoneEvent.End > num2)
+                {
+                    num2 = noiseZoneEvent.End;
+                }
+            }
+            double[] array = new double[num];
+            double[] array2 = new double[num];
+            num = 0;
+            for (int j = 0; j < list.Count; j++)
+            {
+                NoiseZoneEvent noiseZoneEvent2 = list[j];
+                if (num == 0 || noiseZoneEvent2.Start > array2[num - 1])
+                {
+                    array[num] = noiseZoneEvent2.Start;
+                    array2[num] = noiseZoneEvent2.End;
+                    num++;
+                }
+                else if (noiseZoneEvent2.End > array2[num - 1])
+                {
+                    array2[num - 1] = noiseZoneEvent2.End;
+                }
+            }
+            starts = array;
+            ends = array2;
+        }
+
+        private int FirstLive(double time)
+        {
+            if (!(time < double.PositiveInfinity))
+            {
+                return 0;
+            }
+            double[] array = liveEnd;
+            int num = 0;
+            int num2 = array.Length;
+            while (num < num2)
+            {
+                int num3 = num + num2 >> 1;
+                if (array[num3] <= time)
+                {
+                    num = num3 + 1;
+                }
+                else
+                {
+                    num2 = num3;
+                }
+            }
+            return num;
+        }
+
+        public void EvaluateFrame(double time, float[] warnings, bool[] active, float[] shines)
+        {
+            Array.Clear(warnings, 0, warnings.Length);
+            Array.Clear(active, 0, active.Length);
+            ulong num = 0uL;
+            ulong num2 = 0uL;
+            for (int i = FirstLive(time); i < events.Count; i++)
+            {
+                NoiseZoneEvent @event = events[i];
+                if (@event.WarningStart > time)
+                {
+                    break;
+                }
+                if (@event.Sensor >= 0 && @event.Sensor < 33)
+                {
+                    if (time >= @event.Start && time < @event.End)
+                    {
+                        num |= (ulong)(1L << @event.Sensor);
+                    }
+                    if (time >= Math.Max(@event.WarningStart, @event.Start - 0.5) && time < @event.Start)
+                    {
+                        num2 |= (ulong)(1L << @event.Sensor);
+                    }
+                }
+                if (@event.Sensor >= 0 && @event.Sensor < active.Length && !(time >= @event.End))
+                {
+                    if (time >= @event.Start)
+                    {
+                        active[@event.Sensor] = true;
+                        continue;
+                    }
+                    double num3 = (time - @event.WarningStart) / (@event.Start - @event.WarningStart);
+                    warnings[@event.Sensor] = Math.Max(warnings[@event.Sensor], (float)(1.0 - 0.7 * num3));
+                }
+            }
+            ulong num4 = num2 & ~num;
+            float num5 = ((num4 != 0) ? ((float)(0.12 * (1.0 + 0.5 * Math.Sin(time * 37.9)))) : 0f);
+            int num6 = Math.Min(33, shines.Length);
+            for (int j = 0; j < num6; j++)
+            {
+                shines[j] = ((((num4 >> j) & 1) != 0) ? num5 : 0f);
+            }
+        }
+    }
 }

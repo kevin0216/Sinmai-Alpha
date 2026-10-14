@@ -1,10 +1,8 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using SinmaiAlpha.ChartVisuals;
 using SinmaiAlpha.Hosting;
-using HarmonyLib;
 using Manager;
 using Monitor;
 using Monitor.Game;
@@ -33,7 +31,7 @@ public partial class CustomNoteTypes
             Renderer.color = new Color(tint.R, tint.G, tint.B, tint.A);
         }
     }
-    private static readonly ConditionalWeakTable<NotesReader, JudgeLineTimeline> JudgeLineTimelines = new();
+    private static ConditionalWeakTable<NotesReader, JudgeLineTimeline> JudgeLineTimelines = new();
     private static readonly Dictionary<GameMonitor, NativeJudgeLineLease> JudgeLineLeases = new();
 
     // Called with the decoded presentation events once per native reader.
@@ -45,27 +43,44 @@ public partial class CustomNoteTypes
     }
     private static void ApplyJudgeLinePresentation(GameMonitor monitor)
     {
-        if (monitor == null) return;
+        if (monitor == null)
+        {
+            return;
+        }
         if (GuiSizes.SinglePlayer && monitor.MonitorIndex != 0)
-        { ReleaseJudgeLinePresentation(monitor); return; }
-        var reader = NotesManager.Instance(monitor.MonitorIndex).getReader();
-        if (!JudgeLineTimelines.TryGetValue(reader, out var timeline))
-        { ReleaseJudgeLinePresentation(monitor); return; }
-        var controller = Traverse.Create(monitor).Field("GameController").GetValue<GameCtrl>();
-        // Installed Sinmai 1.70 Initialize selects the player's OutlineDesign
-        // sprite on this exact renderer. Do not scan guide/note/effect pools.
-        var outline = controller != null ? Traverse.Create(controller).Field("_guideEndPointObj").GetValue<GameObject>() : null;
-        var renderer = outline != null ? outline.GetComponent<SpriteRenderer>() : null;
-        if (renderer == null) { ReleaseJudgeLinePresentation(monitor); return; }
-        if (!JudgeLineLeases.TryGetValue(monitor, out var lease) || lease.Reader != reader || lease.Timeline != timeline || lease.Renderer != renderer)
         {
             ReleaseJudgeLinePresentation(monitor);
-            var original = renderer.color;
-            lease = new NativeJudgeLineLease { Reader = reader, Timeline = timeline, Renderer = renderer, Original = original,
-                Track = new JudgeLineCommands.Track(timeline.Changes, new JudgeLineCommands.Tint(original.r, original.g, original.b, original.a)) };
-            JudgeLineLeases.Add(monitor, lease);
+            return;
         }
-        lease.Apply(NotesManager.GetCurrentMsec());
+        NotesReader reader = NotesManager.Instance(monitor.MonitorIndex).getReader();
+        if (!JudgeLineTimelines.TryGetValue(reader, out var value))
+        {
+            ReleaseJudgeLinePresentation(monitor);
+            return;
+        }
+        GameCtrl value2 = ControllerOf(monitor);
+        GameObject gameObject = ((value2 != null) ? GuideEndPointOf(value2) : null);
+        SpriteRenderer spriteRenderer = ((gameObject != null) ? gameObject.GetComponent<SpriteRenderer>() : null);
+        if (spriteRenderer == null)
+        {
+            ReleaseJudgeLinePresentation(monitor);
+            return;
+        }
+        if (!JudgeLineLeases.TryGetValue(monitor, out var value3) || value3.Reader != reader || value3.Timeline != value || value3.Renderer != spriteRenderer)
+        {
+            ReleaseJudgeLinePresentation(monitor);
+            Color color = spriteRenderer.color;
+            value3 = new NativeJudgeLineLease
+            {
+                Reader = reader,
+                Timeline = value,
+                Renderer = spriteRenderer,
+                Original = color,
+                Track = new JudgeLineCommands.Track(value.Changes, new JudgeLineCommands.Tint(color.r, color.g, color.b, color.a))
+            };
+            JudgeLineLeases.Add(monitor, value3);
+        }
+        value3.Apply(NotesManager.GetCurrentMsec());
     }
     private static void ReleaseJudgeLinePresentation(GameMonitor monitor)
     {

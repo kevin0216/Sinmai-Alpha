@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using SinmaiAlpha.Hosting;
 using SinmaiAlpha.Notes.Libs;
@@ -71,24 +71,39 @@ public sealed partial class ChartFrameMotion
         foreach (var layer in available) { isolationLayers.Add(layer); ReservedIsolationLayers.Add(layer); }
         return true;
     }
-    private bool HasLayerCollision()
-    {
-        if (isolationLayers.Count == 0) return false;
-        // All our previous leases have already been restored. A new visible
-        // renderer/Canvas on a reserved bit therefore belongs to another mod.
-        foreach (var renderer in Object.FindObjectsOfType<Renderer>())
-            if (renderer != null && isolationLayers.Contains(renderer.gameObject.layer)) return true;
-        foreach (var canvas in Object.FindObjectsOfType<Canvas>())
-            if (canvas != null && isolationLayers.Contains(canvas.gameObject.layer)) return true;
-        return false;
-    }
+
     internal static MonitorBackgroundTownController NativeBackgroundFor(GameMonitor owner)
     {
-        if (owner == null) return null;
-        foreach (var common in Object.FindObjectsOfType<CommonMonitor>())
-            if (common != null && common.MonitorIndex == owner.MonitorIndex)
-                return Traverse.Create(common).Field("_backgroundController").GetValue<MonitorBackgroundTownController>();
-        return null;
+        if (owner == null)
+        {
+            return null;
+        }
+        int monitorIndex = owner.MonitorIndex;
+        bool flag = monitorIndex >= 0 && monitorIndex < BackgroundOwners.Length;
+        CommonMonitor commonMonitor = (flag ? BackgroundOwners[monitorIndex] : null);
+        if (commonMonitor == null || !commonMonitor.isActiveAndEnabled || commonMonitor.MonitorIndex != monitorIndex)
+        {
+            commonMonitor = null;
+            CommonMonitor[] array = UnityEngine.Object.FindObjectsOfType<CommonMonitor>();
+            foreach (CommonMonitor commonMonitor2 in array)
+            {
+                if (commonMonitor2 != null && commonMonitor2.MonitorIndex == monitorIndex)
+                {
+                    commonMonitor = commonMonitor2;
+                    break;
+                }
+            }
+            if (flag)
+            {
+                BackgroundOwners[monitorIndex] = commonMonitor;
+            }
+            if (commonMonitor == null)
+            {
+                return null;
+            }
+        }
+        AccessTools.FieldRef<CommonMonitor, MonitorBackgroundTownController> backgroundController = NativeRefs.BackgroundController;
+        return (backgroundController != null) ? backgroundController(commonMonitor) : Traverse.Create(commonMonitor).Field("_backgroundController").GetValue<MonitorBackgroundTownController>();
     }
     private void DiscoverSurfaces()
     {
@@ -108,48 +123,8 @@ public sealed partial class ChartFrameMotion
         }
         isolationSurfacesDirty = false;
     }
-    private void LeaseScreenClips(GameObject background, PresentationRect viewport)
-    {
-        if (background == null) return;
-        foreach (var renderer in background.GetComponentsInChildren<Renderer>(true))
-        {
-            // The bundled cross-version reference assembly predates this 1.70
-            // component. Resolve its real native component by name at runtime.
-            if (renderer == null || renderer.GetComponent("ScreenClipSetter") == null) continue;
-            var alreadyLeased = false;
-            foreach (var previous in screenClipLeases) if (previous.Owner == renderer) { alreadyLeased = true; break; }
-            if (alreadyLeased) continue;
-            renderer.GetPropertyBlock(screenClipProperties);
-            var min = screenClipProperties.GetFloat(ClipMinX); var max = screenClipProperties.GetFloat(ClipMaxX);
-            // Native SetScreenClipsX writes both floats on initialized sprites.
-            // Empty/uninitialized or intentionally hidden ranges stay native.
-            if (float.IsNaN(min) || float.IsNaN(max) || float.IsInfinity(min) || float.IsInfinity(max) || max <= min) continue;
-            var lease = new ScreenClipLease { Owner = renderer, Min = min, Max = max,
-                AppliedMin = (min - viewport.X) / viewport.Width, AppliedMax = (max - viewport.X) / viewport.Width };
-            screenClipLeases.Add(lease);
-            screenClipProperties.SetFloat(ClipMinX, lease.AppliedMin); screenClipProperties.SetFloat(ClipMaxX, lease.AppliedMax);
-            renderer.SetPropertyBlock(screenClipProperties);
-        }
-    }
-    private bool TryIsolationCrop(GameObject background, PresentationRect bounds, int width, int height, out FrameViewportCrop crop)
-    {
-        if (background != null)
-            foreach (var renderer in background.GetComponentsInChildren<Renderer>(true))
-            {
-                if (renderer == null || renderer.GetComponent("ScreenClipSetter") == null) continue;
-                renderer.GetPropertyBlock(screenClipProperties);
-                var min = screenClipProperties.GetFloat(ClipMinX); var max = screenClipProperties.GetFloat(ClipMaxX);
-                if (float.IsNaN(min) || float.IsNaN(max) || float.IsInfinity(min) || float.IsInfinity(max) || max <= min) continue;
-                // Native projected-coordinate clip comparisons can round in
-                // opposite directions at a source pixel center after cropping.
-                // Keep the original projection for fractional native clip
-                // edges (e.g. half of an odd-width target), retaining the exact
-                // source shader coordinates and the same final visible bounds.
-                if (!ClipPixelAligned(min, width) || !ClipPixelAligned(max, width))
-                    return FrameViewportCrop.TryCreateFull(bounds, width, height, out crop);
-            }
-        return FrameViewportCrop.TryCreate(bounds, width, height, out crop);
-    }
+
+
     private static bool ClipPixelAligned(float edge, int width)
     {
         var pixel = (double)edge * width;
@@ -184,7 +159,26 @@ public sealed partial class ChartFrameMotion
         isolationLeases.Add(owner, lease); owner.layer = layer;
     }
     private void LeaseRenderers(GameObject owner, int layer, int mask)
-    { CollectVisibleRenderers(owner, isolationRenderers); foreach (var renderer in isolationRenderers) LeaseLayer(renderer.gameObject, layer, mask); }
+    {
+        List<Renderer> list = null;
+        for (int i = 0; i < walkedRoots.Count; i++)
+        {
+            if ((object)walkedRoots[i] == owner)
+            {
+                list = walkedRenderers[i];
+                break;
+            }
+        }
+        if (list == null)
+        {
+            CollectVisibleRenderers(owner, isolationRenderers);
+            list = isolationRenderers;
+        }
+        foreach (Renderer isolationRenderer in list)
+        {
+            LeaseLayer(isolationRenderer.gameObject, layer, mask);
+        }
+    }
     private PresentationRect IsolationBounds(RectTransform bounds, Camera camera)
     {
         bounds.GetWorldCorners(isolationCorners);
@@ -198,87 +192,187 @@ public sealed partial class ChartFrameMotion
     }
     private bool PrepareIsolation()
     {
-        var active = false;
-        foreach (var frame in frames.Values) if (frame.Active) { active = true; break; }
-        if (!active) return true;
-        var source = GetComponent<Camera>();
-        if (source == null || renderingIsolation) return FailIsolation("Native render camera unavailable");
+        bool flag = false;
+        foreach (Frame value3 in frames.Values)
+        {
+            if (value3.Active)
+            {
+                flag = true;
+                break;
+            }
+        }
+        if (!flag)
+        {
+            PrimeIsolationTextures();
+            KeepIsolationTexturesPooled();
+            return true;
+        }
+        Camera component = GetComponent<Camera>();
+        if (component == null || renderingIsolation)
+        {
+            return FailIsolation("Native render camera unavailable");
+        }
         DiscoverSurfaces();
-        if (HasLayerCollision())
+        // HasLayerCollision (FindObjectsOfType<Renderer>() and <Canvas>() on the first active frame at least 60 frames
+        // after the last scan, so at every motion onset of a pulsed chart) is gone. Unity sorts every Renderer in memory
+        // by instance ID before it drops the inactive ones, about 38k with ExtendNotesPool 128, so each scan was a hitch
+        // of several ms on the onset frame. It could only return true for a non-leased renderer or canvas on a reserved
+        // layer, and none can exist:
+        // - ReserveLayers hands out only unnamed layers that no GameObject in memory (assets included) uses;
+        // - every game and Sinmai-Alpha asset (1.66 and 1.70 resources/sharedassets/level0, the StreamingAssets prefab
+        //   bundles, Alpha's bundles) uses named layers only (0, 5, 8, 12, 13, 14), so nothing instantiated later
+        //   carries a reserved layer, and new GameObjects start on layer 0;
+        // - the only GameObject.layer writes (Cecil over the 1.66/1.70 Managed folders, MaiMagic, Alpha) are
+        //   LeaseLayer/RestoreIsolation and copies of another object's current layer, and no copy runs between
+        //   LeaseLayer (here, in OnPreCull) and RestoreIsolation (OnPostRender of this camera, or the next
+        //   OnPreCull/BeforeNativeUpdate): only render callbacks run there (CustomAlphaMask.OnRenderObject, and
+        //   Camera.onPreCull's TMP_UpdateManager for the isolation camera, whose one layer write is a TMP_SubMesh
+        //   copying its 3D TextMeshPro's layer; no 3D TextMeshPro exists under a leased root), none of them on a
+        //   leased object.
+        // So the scan returned false on every call, and dropping it changes no output.
+        if (isolationSurfaces.Count == 0 || !ReserveLayers(isolationSurfaces.Count))
         {
-            foreach (var layer in isolationLayers) ReservedIsolationLayers.Remove(layer);
-            isolationLayers.Clear();
+            return FailIsolation("No unused render layers available");
         }
-        if (isolationSurfaces.Count == 0 || !ReserveLayers(isolationSurfaces.Count)) return FailIsolation("No unused render layers available");
-        var all = 0; var passive = 0;
-        originalCameraMask = source.cullingMask;
-        for (var i = 0; i < isolationSurfaces.Count; i++)
+        int num = 0;
+        int num2 = 0;
+        originalCameraMask = component.cullingMask;
+        for (int i = 0; i < isolationSurfaces.Count; i++)
         {
-            var surface = isolationSurfaces[i];
-            if (surface.Canvas == null || surface.Canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+            IsolationSurface isolationSurface = isolationSurfaces[i];
+            if (isolationSurface.Canvas == null || isolationSurface.Canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+            {
                 return FailIsolation("Monitor canvas cannot be isolated by a world camera");
-            surface.Layer = isolationLayers[i]; var bit = 1 << surface.Layer; all |= bit;
-            // SetFestaBGActive destroys/replaces _bgObject during native setup.
-            // Read the live root instead of holding the first prefab clone.
-            surface.Background = surface.BackgroundController != null ? Traverse.Create(surface.BackgroundController).Field("_bgObject").GetValue<GameObject>() : null;
-            if (!frames.TryGetValue(surface.Owner, out var frame) || !frame.Active) passive |= bit;
-            // Unity culls a world Canvas by its root layer, rather than by an
-            // individual label. Nested canvases keep their native sorting.
-            isolationCanvases.Clear(); surface.Canvas.GetComponentsInChildren(false, isolationCanvases);
-            foreach (var canvas in isolationCanvases) if (canvas.enabled) LeaseLayer(canvas.gameObject, surface.Layer, originalCameraMask);
-            LeaseRenderers(surface.Controller.gameObject, surface.Layer, originalCameraMask);
-            LeaseRenderers(surface.Background, surface.Layer, originalCameraMask);
-            if (frame != null) foreach (var cover in frame.Covers) if (cover != null) LeaseRenderers(cover.gameObject, surface.Layer, originalCameraMask);
+            }
+            isolationSurface.Layer = isolationLayers[i];
+            int num3 = 1 << isolationSurface.Layer;
+            num |= num3;
+            isolationSurface.Background = ((isolationSurface.BackgroundController != null) ? NativeBackgroundObject(isolationSurface.BackgroundController) : null);
+            if (!frames.TryGetValue(isolationSurface.Owner, out var value) || !value.Active)
+            {
+                num2 |= num3;
+            }
+            isolationCanvases.Clear();
+            isolationSurface.Canvas.GetComponentsInChildren(includeInactive: false, isolationCanvases);
+            foreach (Canvas isolationCanvase in isolationCanvases)
+            {
+                if (isolationCanvase.enabled)
+                {
+                    LeaseLayer(isolationCanvase.gameObject, isolationSurface.Layer, originalCameraMask);
+                }
+            }
+            LeaseRenderers(isolationSurface.Controller.gameObject, isolationSurface.Layer, originalCameraMask);
+            LeaseRenderers(isolationSurface.Background, isolationSurface.Layer, originalCameraMask);
+            if (value == null)
+            {
+                continue;
+            }
+            foreach (Transform cover in value.Covers)
+            {
+                if (cover != null)
+                {
+                    LeaseRenderers(cover.gameObject, isolationSurface.Layer, originalCameraMask);
+                }
+            }
         }
-        // Each active owner must have its own discovered native canvas.
-        foreach (var pair in frames) if (pair.Value.Active)
+        foreach (KeyValuePair<GameMonitor, Frame> frame in frames)
         {
-            var found = false; foreach (var surface in isolationSurfaces) if (surface.Owner == pair.Key) { found = true; break; }
-            if (!found) return FailIsolation("Native monitor ownership changed");
+            if (!frame.Value.Active)
+            {
+                continue;
+            }
+            bool flag2 = false;
+            foreach (IsolationSurface isolationSurface2 in isolationSurfaces)
+            {
+                if (isolationSurface2.Owner == frame.Key)
+                {
+                    flag2 = true;
+                    break;
+                }
+            }
+            if (!flag2)
+            {
+                return FailIsolation("Native monitor ownership changed");
+            }
         }
         if (isolationCamera == null)
         {
-            var obj = new GameObject("ChartFrameIsolationCamera") { hideFlags = HideFlags.HideAndDontSave };
-            isolationCamera = obj.AddComponent<Camera>(); isolationCamera.enabled = false;
+            GameObject gameObject = new GameObject("ChartFrameIsolationCamera")
+            {
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            isolationCamera = gameObject.AddComponent<Camera>();
+            isolationCamera.enabled = false;
         }
-        var previous = RenderTexture.active;
+        RenderTexture active = RenderTexture.active;
         renderingIsolation = true;
+        pooledIsolationTextures.Clear();
         try
         {
-            foreach (var surface in isolationSurfaces)
+            foreach (IsolationSurface isolationSurface3 in isolationSurfaces)
             {
-                if (!frames.TryGetValue(surface.Owner, out var frame) || !frame.Active) continue;
-                var bounds = IsolationBounds(frame.Bounds, source); if (!bounds.HasArea) continue;
-                var width = source.targetTexture != null ? source.targetTexture.width : source.pixelWidth;
-                var height = source.targetTexture != null ? source.targetTexture.height : source.pixelHeight;
-                if (width <= 0 || height <= 0) return FailIsolation("Native camera has no viewport");
-                if (!TryIsolationCrop(surface.Background, bounds, width, height, out var crop)) continue;
-                // The installed screen-position adapter uses this RGB format.
-                // No alpha channel: translucent UI must not cause the completed
-                // frame to be alpha-blended a second time during the copy.
-                var samples = source.targetTexture != null ? source.targetTexture.antiAliasing : source.allowMSAA ? Math.Max(1, QualitySettings.antiAliasing) : 1;
-                var texture = RenderTexture.GetTemporary(crop.Width, crop.Height, 24, RenderTextureFormat.RGB111110Float, RenderTextureReadWrite.Default, samples);
-                isolatedFrames.Add(new IsolatedFrame { Bounds = bounds, Texture = texture, TextureUv = crop.TextureUv });
-                isolationCamera.CopyFrom(source); isolationCamera.enabled = false;
-                isolationCamera.transform.position = source.transform.position; isolationCamera.transform.rotation = source.transform.rotation;
-                isolationCamera.targetTexture = texture;
-                isolationCamera.rect = new Rect(0, 0, 1, 1);
-                isolationCamera.projectionMatrix = crop.Projection(source.projectionMatrix);
-                isolationCamera.ResetCullingMatrix();
-                isolationCamera.cullingMask = (originalCameraMask & ~all) | (1 << surface.Layer);
-                // An opaque frame avoids alpha being multiplied a second time
-                // when the native GUI texture copy composites it. Common native
-                // backgrounds still render; other monitor roots are excluded.
-                isolationCamera.clearFlags = CameraClearFlags.SolidColor; isolationCamera.backgroundColor = Color.black;
-                try { LeaseScreenClips(surface.Background, crop.ProjectionViewport); isolationCamera.Render(); }
-                finally { RestoreScreenClips(); }
+                if (!frames.TryGetValue(isolationSurface3.Owner, out var value2) || !value2.Active)
+                {
+                    continue;
+                }
+                PresentationRect bounds = IsolationBounds(value2.Bounds, component);
+                if (!bounds.HasArea)
+                {
+                    continue;
+                }
+                int num4 = ((component.targetTexture != null) ? component.targetTexture.width : component.pixelWidth);
+                int num5 = ((component.targetTexture != null) ? component.targetTexture.height : component.pixelHeight);
+                if (num4 <= 0 || num5 <= 0)
+                {
+                    return FailIsolation("Native camera has no viewport");
+                }
+                CollectScreenClipRenderers(isolationSurface3.Background);
+                if (TryIsolationCrop(bounds, num4, num5, out var crop))
+                {
+                    int antiAliasing = ((component.targetTexture != null) ? component.targetTexture.antiAliasing : ((!component.allowMSAA) ? 1 : Math.Max(1, QualitySettings.antiAliasing)));
+                    RenderTexture temporary = RenderTexture.GetTemporary(crop.Width, crop.Height, 24, RenderTextureFormat.RGB111110Float, RenderTextureReadWrite.Default, antiAliasing);
+                    pooledIsolationTextures.Add(crop.Width);
+                    pooledIsolationTextures.Add(crop.Height);
+                    pooledIsolationTextures.Add(antiAliasing);
+                    isolatedFrames.Add(new IsolatedFrame
+                    {
+                        Bounds = bounds,
+                        Texture = temporary,
+                        TextureUv = crop.TextureUv
+                    });
+                    isolationCamera.CopyFrom(component);
+                    isolationCamera.enabled = false;
+                    isolationCamera.transform.position = component.transform.position;
+                    isolationCamera.transform.rotation = component.transform.rotation;
+                    isolationCamera.targetTexture = temporary;
+                    isolationCamera.rect = new Rect(0f, 0f, 1f, 1f);
+                    isolationCamera.projectionMatrix = crop.Projection(component.projectionMatrix);
+                    isolationCamera.ResetCullingMatrix();
+                    isolationCamera.cullingMask = (originalCameraMask & ~num) | (1 << isolationSurface3.Layer);
+                    isolationCamera.clearFlags = CameraClearFlags.Color;
+                    isolationCamera.backgroundColor = Color.black;
+                    try
+                    {
+                        LeaseScreenClips(crop.ProjectionViewport);
+                        isolationCamera.Render();
+                    }
+                    finally
+                    {
+                        RestoreScreenClips();
+                    }
+                }
             }
-            leasedSourceCamera = source;
-            appliedCameraMask = (originalCameraMask & ~all) | passive;
-            source.cullingMask = appliedCameraMask;
+            leasedSourceCamera = component;
+            appliedCameraMask = (originalCameraMask & ~num) | num2;
+            component.cullingMask = appliedCameraMask;
             return true;
         }
-        finally { isolationCamera.targetTexture = null; renderingIsolation = false; RenderTexture.active = previous; }
+        finally
+        {
+            isolationCamera.targetTexture = null;
+            renderingIsolation = false;
+            RenderTexture.active = active;
+        }
     }
     private bool FailIsolation(string reason)
     {
@@ -303,10 +397,21 @@ public sealed partial class ChartFrameMotion
     }
     private void ReleaseIsolation()
     {
-        foreach (var layer in isolationLayers) ReservedIsolationLayers.Remove(layer);
-        isolationLayers.Clear(); isolationSurfaces.Clear(); isolationSurfacesDirty = true;
-        if (isolationCamera != null) Object.Destroy(isolationCamera.gameObject);
-        isolationCamera = null; isolationWarning = false;
+        foreach (int isolationLayer in isolationLayers)
+        {
+            ReservedIsolationLayers.Remove(isolationLayer);
+        }
+        isolationLayers.Clear();
+        pooledIsolationTextures.Clear();
+        isolationPrimed = false;
+        isolationSurfaces.Clear();
+        isolationSurfacesDirty = true;
+        if (isolationCamera != null)
+        {
+            UnityEngine.Object.Destroy(isolationCamera.gameObject);
+        }
+        isolationCamera = null;
+        isolationWarning = false;
     }
     internal bool HasIsolatedFrames => isolatedFrames.Count != 0;
     internal void CompositeIsolation(RenderTexture source, RenderTexture destination)

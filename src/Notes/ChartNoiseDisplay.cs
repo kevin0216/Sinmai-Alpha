@@ -1,4 +1,4 @@
-﻿// Display geometry and compositing sequence adapted from the supplied
+// Display geometry and compositing sequence adapted from the supplied
 // MajdataPlayAlpha compiled reference, GPL-3.0; see the frozen reference and
 // NoiseZoneSources.md. This file has no input, judgment or score implementation.
 using System;
@@ -20,7 +20,6 @@ public partial class CustomNoteTypes
 
         private readonly float[] warningShines = new float[33];
 
-        private readonly bool[] active = new bool[33];
 
         private readonly bool[] visible = new bool[33];
 
@@ -41,6 +40,12 @@ public partial class CustomNoteTypes
         private List<System.Numerics.Vector2>[] cells;
         private readonly List<System.Numerics.Vector2>[] warningCells = new List<System.Numerics.Vector2>[33];
         private readonly NoiseZoneVisual[] styles = new NoiseZoneVisual[33];
+        private readonly NoiseZoneEvent?[] selectedVisuals = new NoiseZoneEvent?[33];
+        private readonly VisualValue styleScratch = new VisualValue();
+        private readonly bool[] meshZones = new bool[33];
+        private readonly float[] meshWarnings = new float[33], meshShines = new float[33];
+        private readonly NoiseZoneVisual[] meshStyles = new NoiseZoneVisual[33];
+        private bool meshInputsValid;
         private NoiseZoneEvent[] visualEvents = new NoiseZoneEvent[0];
         private readonly struct NoiseZoneVisual
         {
@@ -52,9 +57,6 @@ public partial class CustomNoteTypes
                 Size = new Vector2(value?.X ?? 1, value?.Y ?? 1); CustomColor = value?.Color != null;
             }
         }
-        private static float Progress(NoiseZoneEvent zone, double time) => zone.Controls != null
-            ? zone.Controls.WarningProgress(time - zone.Start, zone.NativeLead)
-            : time < zone.WarningStart || time >= zone.Start ? -1 : (float)((time - zone.WarningStart)/(zone.Start-zone.WarningStart));
 
         private readonly List<UnityEngine.Vector2> projected = new List<UnityEngine.Vector2>();
 
@@ -71,7 +73,10 @@ public partial class CustomNoteTypes
         private const float Radius = 4.8f;
 
         internal int GeometryVersion { get; private set; }
-        internal bool HasActive => Enumerable.Any(visible, (bool value) => value);
+        internal bool HasActive
+        {
+            get { for (var i = 0; i < visible.Length; i++) if (visible[i]) return true; return false; }
+        }
 
         internal double Time => Clock?.Invoke() ?? 0.0;
 
@@ -135,110 +140,136 @@ public partial class CustomNoteTypes
                 return;
             }
             lastTime = time;
-            timeline.Evaluate(time, warnings, active);
-            Array.Clear(warnings, 0, warnings.Length);
-            foreach (var zone in visualEvents)
-            {
-                var progress = Progress(zone, time);
-                if (progress >= 0) warnings[zone.Sensor] = Math.Max(warnings[zone.Sensor], 1 - .55f * progress);
-            }
+            NoiseVisualState.Evaluate(visualEvents, time, warnings, selectedVisuals);
+            var anyWarning = false;
             for (var i = 0; i < 33; i++)
             {
                 visible[i] = timeline.TryGetVisualSpan(i, time, out _, out _);
                 warningZones[i] = !visible[i] && warnings[i] > 0;
-                NoiseZoneEvent? selected = null;
-                foreach (var zone in visualEvents)
-                {
-                    if (zone.Sensor != i || time >= zone.End || time < zone.Start && Progress(zone,time) < 0) continue;
-                    if (!selected.HasValue || zone.Start <= time && selected.Value.Start > time ||
-                        (zone.Start <= time) == (selected.Value.Start <= time) && (zone.Start <= time ? zone.Start >= selected.Value.Start : zone.Start < selected.Value.Start)) selected = zone;
-                }
-                styles[i] = new NoiseZoneVisual(selected?.Controls?.Style(time - selected.Value.Start));
+                var selected = selectedVisuals[i];
+                styles[i] = new NoiseZoneVisual(selected?.Controls?.Style(time - selected.Value.Start, styleScratch));
                 if (warningCells[i] == null) warningCells[i] = new List<System.Numerics.Vector2>();
-                warningCells[i].Clear(); foreach(var point in cells[i]) warningCells[i].Add(ScalePoint(point,i));
+                warningCells[i].Clear(); foreach (var point in cells[i]) warningCells[i].Add(ScalePoint(point, i));
                 warningShines[i] = warningZones[i] ? (float)(.06 * (1 + .5 * Math.Sin(time * 37.9))) : 0;
+                anyWarning |= warningZones[i];
             }
-            NoiseZoneGeometry.MergeWarningLevels(cells, centers, warningZones, 4.8f, warnings, warningShines);
-		material.SetFloat("_ZoneTime", (float)time);
-		vertices.Clear();
-		uvs.Clear();
-		flags.Clear();
-		colors.Clear();
-		triangles.Clear();
-		for (int k = 0; k < 33; k++)
-		{
-			if (!warningZones[k] || cells[k].Count < 3)
-			{
-				continue;
-			}
-			List<System.Numerics.Vector2> list = warningCells[k];
-			float num4 = warnings[k];
-			float num5 = warningShines[k];
-			int count = vertices.Count;
-			Color color = (styles[k].CustomColor ? styles[k].Color : Color.white);
-			color.a = num4 * styles[k].Color.a;
-			foreach (System.Numerics.Vector2 item2 in list)
-			{
-				AddVertex(item2, color, 1f);
-			}
-			for (int l = 1; l + 1 < list.Count; l++)
-			{
-				AddTriangle(count, count + l, count + l + 1);
-			}
-			if (!(num5 > 0f))
-			{
-				continue;
-			}
-			int count2 = vertices.Count;
-			foreach (System.Numerics.Vector2 item3 in list)
-			{
-				AddVertex(item3, new Color(1f, 1f, 1f, num5 * styles[k].Color.a), 0f);
-			}
-			for (int m = 1; m + 1 < list.Count; m++)
-			{
-				AddTriangle(count2, count2 + m, count2 + m + 1);
-			}
-		}
-		foreach (NoiseZoneGeometry.Contour item4 in NoiseZoneGeometry.UnionContours(warningCells, centers, warningZones, 4.8f))
-		{
-			float num6 = warningShines[item4.Sensor];
-			float t = ((num6 > 0f) ? (0.35f * Mathf.Pow(Mathf.Clamp01(num6 / 0.09f), 2f)) : 0f);
-			Color color2 = styles[item4.Sensor].Color;
-			Color color3 = Color.Lerp(styles[item4.Sensor].CustomColor ? color2 : new Color(1f, 0.33018857f, 0.33018857f, 1f), Color.white, t);
-			color3.a = warnings[item4.Sensor] * color2.a;
-			List<System.Numerics.Vector2> points = item4.Points;
-			int count3 = vertices.Count;
-			for (int n = 0; n < points.Count; n++)
-			{
-				System.Numerics.Vector2 vector = points[(n + points.Count - 1) % points.Count];
-				System.Numerics.Vector2 vector2 = points[n];
-				System.Numerics.Vector2 vector3 = points[(n + 1) % points.Count];
-				System.Numerics.Vector2 vector4 = System.Numerics.Vector2.Normalize(vector2 - vector);
-				System.Numerics.Vector2 vector5 = System.Numerics.Vector2.Normalize(vector3 - vector2);
-				System.Numerics.Vector2 vector6 = new System.Numerics.Vector2(0f - vector4.Y, vector4.X);
-				System.Numerics.Vector2 vector7 = new System.Numerics.Vector2(0f - vector5.Y, vector5.X);
-				System.Numerics.Vector2 value = vector6 + vector7;
-				System.Numerics.Vector2 vector8 = ((value.LengthSquared() > 1E-06f) ? System.Numerics.Vector2.Normalize(value) : vector7);
-				System.Numerics.Vector2 vector9 = vector8 * (0.022f / Math.Max(0.35f, System.Numerics.Vector2.Dot(vector8, vector7)));
-				AddVertex(vector2, color3, 0f);
-				AddVertex(vector2 + vector9, color3, 0f);
-			}
-			for (int num7 = 0; num7 < points.Count; num7++)
-			{
-				int num8 = count3 + num7 * 2;
-				int num9 = count3 + (num7 + 1) % points.Count * 2;
-				AddTriangle(num8, num9, num9 + 1);
-				AddTriangle(num8, num9 + 1, num8 + 1);
-			}
-		}
-		mesh.Clear();
-		mesh.SetVertices(vertices);
-		mesh.SetUVs(0, uvs);
-		mesh.SetUVs(1, flags);
-		mesh.SetColors(colors);
-		mesh.SetTriangles(triangles, 0);
-		mesh.RecalculateBounds();
-	}
+            if (anyWarning) NoiseZoneGeometry.MergeWarningLevels(cells, centers, warningZones, 4.8f, warnings, warningShines);
+            material.SetFloat("_ZoneTime", (float)time);
+            if (SameMeshInputs()) return;
+            vertices.Clear();
+            uvs.Clear();
+            flags.Clear();
+            colors.Clear();
+            triangles.Clear();
+            for (int k = 0; k < 33; k++)
+            {
+                if (!warningZones[k] || cells[k].Count < 3)
+                {
+                    continue;
+                }
+                List<System.Numerics.Vector2> list = warningCells[k];
+                float num4 = warnings[k];
+                float num5 = warningShines[k];
+                int count = vertices.Count;
+                Color color = (styles[k].CustomColor ? styles[k].Color : Color.white);
+                color.a = num4 * styles[k].Color.a;
+                foreach (System.Numerics.Vector2 item2 in list)
+                {
+                    AddVertex(item2, color, 1f);
+                }
+                for (int l = 1; l + 1 < list.Count; l++)
+                {
+                    AddTriangle(count, count + l, count + l + 1);
+                }
+                if (!(num5 > 0f))
+                {
+                    continue;
+                }
+                int count2 = vertices.Count;
+                foreach (System.Numerics.Vector2 item3 in list)
+                {
+                    AddVertex(item3, new Color(1f, 1f, 1f, num5 * styles[k].Color.a), 0f);
+                }
+                for (int m = 1; m + 1 < list.Count; m++)
+                {
+                    AddTriangle(count2, count2 + m, count2 + m + 1);
+                }
+            }
+            foreach (NoiseZoneGeometry.Contour item4 in NoiseZoneGeometry.UnionContours(warningCells, centers, warningZones, 4.8f))
+            {
+                float num6 = warningShines[item4.Sensor];
+                float t = ((num6 > 0f) ? (0.35f * Mathf.Pow(Mathf.Clamp01(num6 / 0.09f), 2f)) : 0f);
+                Color color2 = styles[item4.Sensor].Color;
+                Color color3 = Color.Lerp(styles[item4.Sensor].CustomColor ? color2 : new Color(1f, 0.33018857f, 0.33018857f, 1f), Color.white, t);
+                color3.a = warnings[item4.Sensor] * color2.a;
+                List<System.Numerics.Vector2> points = item4.Points;
+                int count3 = vertices.Count;
+                for (int n = 0; n < points.Count; n++)
+                {
+                    System.Numerics.Vector2 vector = points[(n + points.Count - 1) % points.Count];
+                    System.Numerics.Vector2 vector2 = points[n];
+                    System.Numerics.Vector2 vector3 = points[(n + 1) % points.Count];
+                    System.Numerics.Vector2 vector4 = System.Numerics.Vector2.Normalize(vector2 - vector);
+                    System.Numerics.Vector2 vector5 = System.Numerics.Vector2.Normalize(vector3 - vector2);
+                    System.Numerics.Vector2 vector6 = new System.Numerics.Vector2(0f - vector4.Y, vector4.X);
+                    System.Numerics.Vector2 vector7 = new System.Numerics.Vector2(0f - vector5.Y, vector5.X);
+                    System.Numerics.Vector2 value = vector6 + vector7;
+                    System.Numerics.Vector2 vector8 = ((value.LengthSquared() > 1E-06f) ? System.Numerics.Vector2.Normalize(value) : vector7);
+                    System.Numerics.Vector2 vector9 = vector8 * (0.022f / Math.Max(0.35f, System.Numerics.Vector2.Dot(vector8, vector7)));
+                    AddVertex(vector2, color3, 0f);
+                    AddVertex(vector2 + vector9, color3, 0f);
+                }
+                for (int num7 = 0; num7 < points.Count; num7++)
+                {
+                    int num8 = count3 + num7 * 2;
+                    int num9 = count3 + (num7 + 1) % points.Count * 2;
+                    AddTriangle(num8, num9, num9 + 1);
+                    AddTriangle(num8, num9 + 1, num8 + 1);
+                }
+            }
+            mesh.Clear();
+            mesh.SetVertices(vertices);
+            mesh.SetUVs(0, uvs);
+            mesh.SetUVs(1, flags);
+            mesh.SetColors(colors);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateBounds();
+        }
+
+        private bool SameMeshInputs()
+        {
+            var same = meshInputsValid;
+            for (var i = 0; i < 33; i++)
+            {
+                if (meshZones[i] != warningZones[i] || warningZones[i] &&
+                    (!meshWarnings[i].Equals(warnings[i]) || !meshShines[i].Equals(warningShines[i]) ||
+                     !meshStyles[i].Size.Equals(styles[i].Size) || !meshStyles[i].Color.Equals(styles[i].Color) ||
+                     meshStyles[i].CustomColor != styles[i].CustomColor)) same = false;
+                meshZones[i] = warningZones[i]; meshWarnings[i] = warnings[i];
+                meshShines[i] = warningShines[i]; meshStyles[i] = styles[i];
+            }
+            meshInputsValid = true;
+            return same;
+        }
+
+        // Between growth/shrink windows, the raster depends only on visibility,
+        // size, color and projection. Shader animation still runs every frame.
+        internal ulong ActiveMaskState(Vector2[] sizes, Color32[] colors, out bool changed)
+        {
+            ulong bits = 0; changed = false;
+            var time = Time;
+            for (var i = 0; i < 33; i++)
+            {
+                if (!visible[i] || !timeline.TryGetVisualSpan(i, time, out var start, out var end)) continue;
+                bits |= 1UL << i;
+                Color32 color = styles[i].Color;
+                if (!sizes[i].Equals(styles[i].Size) || !colors[i].Equals(color)) changed = true;
+                sizes[i] = styles[i].Size; colors[i] = color;
+                var duration = end - start <= .25 ? 0 : Math.Min(.24, (end - start) * .3);
+                if (time < start + duration || time > end - duration) changed = true;
+            }
+            return bits;
+        }
 
         private void AddVertex(System.Numerics.Vector2 point, Color color, float kind)
         {
@@ -282,14 +313,14 @@ public partial class CustomNoteTypes
                     RasterCell(cells[i], i, camera, field, width, height, pixels, null, viewport);
         }
 
-	internal void FillActiveMask(Camera camera, UnityEngine.Matrix4x4 field, int width, int height, byte[] pixels, PresentationRect viewport, Color32[] stylePixels = null)
+        internal void FillActiveMask(Camera camera, UnityEngine.Matrix4x4 field, int width, int height, byte[] pixels, PresentationRect viewport, Color32[] stylePixels = null)
 	{
 		Array.Clear(pixels, 0, pixels.Length);
 		if (stylePixels != null)
 		{
 			Array.Clear(stylePixels, 0, stylePixels.Length);
 		}
-		for (int i = 0; i < active.Length; i++)
+		for (int i = 0; i < visible.Length; i++)
 		{
 			if (!visible[i] || !timeline.TryGetVisualSpan(i, Time, out var start, out var end))
 			{
@@ -393,8 +424,8 @@ public partial class CustomNoteTypes
 
         public void Clear()
         {
+            meshInputsValid = false;
             timeline.Configure(null);
-            Array.Clear(active, 0, active.Length);
             Array.Clear(visible, 0, visible.Length);
             Array.Clear(warnings, 0, warnings.Length);
             if (visual != null)
@@ -456,6 +487,14 @@ public partial class CustomNoteTypes
         private Texture2D sourceStyles;
         private Color32[] stylePixels;
         private int[] styleQueue, styleDistance;
+        private bool activeMaskValid;
+        private NoiseZoneDisplay activeMaskOwner;
+        private int activeMaskGeometry;
+        private ulong activeMaskBits;
+        private readonly Vector2[] activeMaskSizes = new Vector2[33];
+        private readonly Color32[] activeMaskColors = new Color32[33];
+        private Matrix4x4 activeMaskField, activeMaskView, activeMaskProjection;
+        private PresentationRect activeMaskViewport;
 
         private RenderTexture compose;
 
@@ -492,11 +531,24 @@ public partial class CustomNoteTypes
                 return null;
             }
             Ensure(outputWidth, outputHeight);
-            owner.FillActiveMask(camera, field, width, height, maskBytes, viewport, stylePixels);
+            var maskBits = owner.ActiveMaskState(activeMaskSizes, activeMaskColors, out var activeChanged);
+            var view = camera.worldToCameraMatrix; var projection = camera.projectionMatrix;
+            if (!activeMaskValid || activeMaskOwner != owner || activeMaskGeometry != owner.GeometryVersion ||
+                activeMaskBits != maskBits || activeChanged || !activeMaskField.Equals(field) ||
+                !activeMaskView.Equals(view) || !activeMaskProjection.Equals(projection) || !activeMaskViewport.Equals(viewport))
+            {
+                owner.FillActiveMask(camera, field, width, height, maskBytes, viewport, stylePixels);
+                SpreadStyles();
+                sourceStyles.SetPixels32(stylePixels); sourceStyles.Apply(false);
+                sourceMask.LoadRawTextureData(maskBytes); sourceMask.Apply(false);
+                activeMaskOwner = owner; activeMaskGeometry = owner.GeometryVersion; activeMaskBits = maskBits;
+                activeMaskField = field; activeMaskView = view; activeMaskProjection = projection; activeMaskViewport = viewport;
+                // The first stable frame must replace the last animated raster.
+                activeMaskValid = !activeChanged;
+            }
             // Warning protection covers complete cells, independent of warning progress.
             // Rebuild only when coverage, size, projection or output geometry changes.
             var bits = owner.WarningMaskState(warningSizes, out var sizeChanged);
-            var view = camera.worldToCameraMatrix; var projection = camera.projectionMatrix;
             if (!warningValid || warningOwner != owner || warningGeometry != owner.GeometryVersion ||
                 warningBits != bits || sizeChanged || !warningField.Equals(field) ||
                 !warningView.Equals(view) || !warningProjection.Equals(projection) || !warningViewport.Equals(viewport))
@@ -509,11 +561,7 @@ public partial class CustomNoteTypes
                 warningValid = true;
             }
             material.SetTexture("_Warnings", warningMask);
-            SpreadStyles();
-            sourceStyles.SetPixels32(stylePixels); sourceStyles.Apply(false);
             material.SetTexture("_Styles", sourceStyles);
-            sourceMask.LoadRawTextureData(maskBytes);
-            sourceMask.Apply(updateMipmaps: false);
             material.SetFloat("_ZoneTime", (float)owner.Time);
             material.SetVector("_OutputSize", new UnityEngine.Vector4(outputWidth, outputHeight, 1f / (float)outputWidth, 1f / (float)outputHeight));
             ping.filterMode = FilterMode.Point;
@@ -540,7 +588,7 @@ public partial class CustomNoteTypes
             finally { RenderTexture.active = previousActive; }
         }
 
-        private void Ensure(int outputWidth, int outputHeight)
+        internal void Ensure(int outputWidth, int outputHeight)
         {
             if (material == null)
             {
@@ -634,6 +682,7 @@ public partial class CustomNoteTypes
 
         private void ReleaseMasks()
         {
+            activeMaskValid = false; activeMaskOwner = null;
             warningValid = false; warningOwner = null;
             RenderTexture[] array = new RenderTexture[3] { compose, ping, pong };
             foreach (RenderTexture renderTexture in array)

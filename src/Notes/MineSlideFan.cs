@@ -1,3 +1,4 @@
+using HarmonyLib;
 using System.Reflection;
 using Manager;
 using Monitor;
@@ -43,14 +44,18 @@ public class MineSlideFan : SlideFan
     protected override void UpdateAlpha()
     {
         base.UpdateAlpha();
-        // slide_fun_mine_00-10 是白色贴图，染灰（地雷风格），保留 base 算好的 alpha 淡入淡出。
-        var lines = HarmonyLib.Traverse.Create(this).Field("_spriteLines").GetValue<SpriteRenderer[]>();
-        if (lines == null) return;
-        foreach (var sr in lines)
+        SpriteRenderer[] value = ((SpriteLines != null) ? SpriteLines(this) : Traverse.Create(this).Field("_spriteLines").GetValue<SpriteRenderer[]>());
+        if (value == null)
         {
-            if (sr == null) continue;
-            var c = sr.color;
-            sr.color = new Color(0.5f, 0.5f, 0.5f, c.a);
+            return;
+        }
+        SpriteRenderer[] array = value;
+        foreach (SpriteRenderer spriteRenderer in array)
+        {
+            if (!(spriteRenderer == null))
+            {
+                spriteRenderer.color = new Color(0.5f, 0.5f, 0.5f, spriteRenderer.color.a);
+            }
         }
     }
 
@@ -61,5 +66,21 @@ public class MineSlideFan : SlideFan
             // 基类 Awake 是 private，用反射补执行（实例化 _arrowPrefubs 并填充 _spriteLines 等）。
             typeof(SlideFan).GetMethod("Awake", BindingFlags.Instance | BindingFlags.NonPublic)?.Invoke(m, null);
         });
+    }
+
+
+    private static readonly AccessTools.FieldRef<SlideFan, SpriteRenderer[]> SpriteLines = SpriteLinesRef();
+
+    private static AccessTools.FieldRef<SlideFan, SpriteRenderer[]> SpriteLinesRef()
+    {
+        try
+        {
+            FieldInfo field = typeof(SlideFan).GetField("_spriteLines", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            return (field != null && field.FieldType == typeof(SpriteRenderer[])) ? AccessTools.FieldRefAccess<SlideFan, SpriteRenderer[]>(field) : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

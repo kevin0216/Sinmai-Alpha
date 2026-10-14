@@ -1,18 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using SinmaiAlpha.Hosting;
-using DB;
 using HarmonyLib;
-using MAI2.Util;
 using Manager;
 using MelonLoader;
 using Monitor;
-using Monitor.Game;
-using Process;
 using UnityEngine;
 using SinmaiAlpha.Notes.Libs;
 
@@ -216,21 +209,41 @@ public partial class CustomNoteTypes
     [HarmonyPatch(typeof(SlideRoot), "UpdateAlpha")]
     public static void UpdateAlphaSafePrefix(SlideRoot __instance)
     {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-        var t = Traverse.Create(__instance);
-        var noteData = t.Field("NoteData").GetValue<NoteData>();
-        if (noteData == null) return;
-        var dispLane = t.Field("_dispLaneNum").GetValue<int>();
-        var spriteRenders = (List<SpriteRenderer>)t.Field("_spriteRenders").GetValue();
-        var breakRenders = (List<BreakSlide>)t.Field("_breakSpriteRenders").GetValue();
-        var isBreak = t.Field("BreakFlag").GetValue<bool>();
-        var max = isBreak ? breakRenders.Count : spriteRenders.Count;
-        if (dispLane > max)
+        if (!FeaturesEnabled(__instance))
         {
-            // 原版 GetSlideArrowNum（分配箭头数）与 Initialize 的 _dispLaneNum（按路径点算）
-            // 理论上一致；不一致说明路径/段结构异常（如长链同屏过多耗尽箭头池），clamp 防崩。
-            t.Field("_dispLaneNum").SetValue(max);
+            return;
+        }
+        // Same reads and the same conditional write through typed refs; the reads have no side effects, and
+        // the list that is dereferenced (and could throw) is chosen by BreakFlag exactly as before.
+        AccessTools.FieldRef<SlideRoot, NoteData> note = SlideRefs.Note;
+        AccessTools.FieldRef<SlideRoot, int> dispLaneNum = SlideRefs.DispLaneNum;
+        AccessTools.FieldRef<SlideRoot, List<SpriteRenderer>> sprites = SlideRefs.Sprites;
+        AccessTools.FieldRef<SlideRoot, List<BreakSlide>> breakSprites = SlideRefs.BreakSprites;
+        AccessTools.FieldRef<SlideRoot, bool> breakFlag = SlideRefs.BreakFlag;
+        if (note != null && dispLaneNum != null && sprites != null && breakSprites != null && breakFlag != null)
+        {
+            if (note(__instance) != null)
+            {
+                int count = (breakFlag(__instance) ? breakSprites(__instance).Count : sprites(__instance).Count);
+                ref int reference = ref dispLaneNum(__instance);
+                if (reference > count)
+                {
+                    reference = count;
+                }
+            }
+            return;
+        }
+        Traverse traverse = Traverse.Create(__instance);
+        if (traverse.Field("NoteData").GetValue<NoteData>() != null)
+        {
+            int value = traverse.Field("_dispLaneNum").GetValue<int>();
+            List<SpriteRenderer> list = (List<SpriteRenderer>)traverse.Field("_spriteRenders").GetValue();
+            List<BreakSlide> list2 = (List<BreakSlide>)traverse.Field("_breakSpriteRenders").GetValue();
+            int num = (traverse.Field("BreakFlag").GetValue<bool>() ? list2.Count : list.Count);
+            if (value > num)
+            {
+                traverse.Field("_dispLaneNum").SetValue(num);
+            }
         }
     }
 

@@ -30,9 +30,9 @@ public partial class CustomNoteTypes
         public bool _pendingMineForCurrentLoad;
         public bool _pendingTouchBreakForCurrentLoad;
         public bool _pendingTouchStarForCurrentLoad;
-        public readonly Queue<bool> PendingMineFlags = new Queue<bool>();
-        public readonly Queue<bool> PendingTouchBreakFlags = new Queue<bool>();
-        public readonly Queue<bool> PendingTouchStarFlags = new Queue<bool>();
+
+
+
         public readonly List<(int Bar, int Grid, string Text)> PendingSvSegments = new List<(int, int, string)>();
         public readonly List<(int Bar, int Grid, string Text)> PendingHsSegments = new List<(int, int, string)>();
         public readonly Dictionary<string, List<(float Msec, float Mult)>> SvCurves = new Dictionary<string, List<(float Msec, float Mult)>>();
@@ -78,5 +78,10 @@ public partial class CustomNoteTypes
         public readonly List<(int Bar, int Grid, string Kind, string Text)> PendingMedia = new();
         public readonly List<(int Bar, int Grid, string Text)> PendingSubtitles = new();
         public readonly List<(int Bar, int Grid, string Text)> PendingNoiseZones = new();
+
+
+        public Dictionary<int, RingActivationCacheEntry> RingActivationLeadCache;
+
+        public readonly Dictionary<NoteData, ActivationLeadMemoEntry> ActivationLeadMemo = new Dictionary<NoteData, ActivationLeadMemoEntry>();
     }
 }

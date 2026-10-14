@@ -218,7 +218,8 @@ internal static class LevelTextStyle
         {
             Graphics.Blit(source, rt); RenderTexture.active = rt;
             copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false, true);
-            copy.ReadPixels(new Rect(0, 0, source.width, source.height), 0, 0); copy.Apply();
+            // The atlas is read on the CPU only; no upload is needed after ReadPixels.
+            copy.ReadPixels(new Rect(0, 0, source.width, source.height), 0, 0, false);
             var colors = copy.GetPixels32(); var alpha = new byte[colors.Length];
             for (var i = 0; i < colors.Length; i++) alpha[i] = colors[i].a;
             atlas = new Atlas { Width = source.width, Height = source.height, Alpha = alpha }; Atlases[source] = atlas; return atlas;

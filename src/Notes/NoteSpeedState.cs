@@ -1,15 +1,10 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection.Emit;
 using SinmaiAlpha.ChartVisuals;
 using SinmaiAlpha.Notes.Libs;
-using DB;
 using HarmonyLib;
 using Manager;
-using MAI2.Util;
 using Monitor;
-using UnityEngine;
 
 namespace SinmaiAlpha.Notes;
 
@@ -102,94 +97,17 @@ public partial class CustomNoteTypes
     }
     private static void ApplySlideSvMotion(SlideRoot owner, bool fan)
     {
-        var fields = Traverse.Create(owner);
-        var note = fields.Field("NoteData").GetValue<NoteData>();
-        if (note == null) return;
-        var touch = note as CustomSlideNoteData;
-        VisualNotes.TryGetValue(note, out var visual);
-        if (touch?.TouchGeometry == null && visual?.SlideGeometry == null && !MajdataHasSlideSvFor(note)) return;
-        var start = fields.Field("StarLaunchMsec").GetValue<float>();
-        var end = fields.Field("StarArriveMsec").GetValue<float>();
-        var now = NotesManager.GetCurrentMsec();
-        if (end <= start) return;
-        if (!fan && visual?.SlideGeometry != null)
+        NoteData note = SlideNoteDataOf(owner);
+        if (note == null)
         {
-            var star = fields.Field("_baseStarNote").GetValue<GameObject>();
-            if (star == null) return;
-            var pose = visual.SlideGeometry.DisplayPose(start, end - start, now,
-                (localStart, localDuration, time) => MajdataSlideProgress(note, localStart, localDuration, time));
-            var point = new System.Numerics.Complex(pose.x * 100, pose.y * 100);
-            var direction = System.Numerics.Complex.FromPolarCoordinates(1, pose.z * Math.PI / 180);
-            var mirror = Singleton<GamePlayManager>.Instance.GetGameScore(owner.MonitorId).UserOption.MirrorMode;
-            System.Numerics.Complex Mirror(System.Numerics.Complex value) => mirror switch
-            {
-                OptionMirrorID.LR => -System.Numerics.Complex.Conjugate(value),
-                OptionMirrorID.UD => System.Numerics.Complex.Conjugate(value),
-                OptionMirrorID.UDLR => -value, _ => value
-            };
-            var rotor = System.Numerics.Complex.FromPolarCoordinates(1, Math.PI / 4 * owner.ButtonId);
-            point = Mirror(point) * rotor; direction = Mirror(direction) * rotor;
-            star.transform.localPosition = new Vector3((float)point.Real, (float)point.Imaginary, star.transform.localPosition.z);
-            star.transform.localRotation = Quaternion.Euler(0, 0, (float)(direction.Phase * 180 / Math.PI));
             return;
         }
-        var progress = now <= start ? 0 : MajdataSlideProgress(note, start, end - start, now);
-        if (touch?.TouchGeometry != null)
+        CustomSlideNoteData touch = note as CustomSlideNoteData;
+        VisualNotes.TryGetValue(note, out var value);
+        if (touch?.TouchGeometry == null && value?.SlideGeometry == null && !MajdataHasSlideSvFor(note))
         {
-            var star = fields.Field("_baseStarNote").GetValue<GameObject>();
-            if (star == null) return;
-            var point = touch.TouchGeometry.GetPointAt(progress);
-            var tangent = touch.TouchGeometry.GetTangentAt(progress);
-            System.Numerics.Complex Mirror(System.Numerics.Complex v) => touch.TouchMirror switch
-            {
-                OptionMirrorID.LR => -System.Numerics.Complex.Conjugate(v),
-                OptionMirrorID.UD => System.Numerics.Complex.Conjugate(v),
-                OptionMirrorID.UDLR => -v, _ => v
-            };
-            var rotor = System.Numerics.Complex.FromPolarCoordinates(1, Math.PI / 4 * owner.ButtonId);
-            point = Mirror(point) * rotor; tangent = Mirror(tangent) * rotor;
-            star.transform.localPosition = new Vector3((float)point.Real, (float)point.Imaginary, star.transform.localPosition.z);
-            star.transform.localRotation = Quaternion.Euler(0, 0, (float)(tangent.Phase * 180 / Math.PI) + MajdataSlidePath.ReferenceRotation + 18);
             return;
         }
-        if (now < start) return;
-        void Pose(GameObject star, IList<List<Vector4>> paths)
-        {
-            if (star == null || paths.Count == 0) return;
-            var length = 0f;
-            foreach (var path in paths) if (path.Count != 0) length += path[path.Count - 1].z;
-            var distance = length * progress;
-            Vector4 a = default, b = default; var fraction = 0f;
-            foreach (var path in paths)
-            {
-                if (path.Count == 0) continue;
-                a = b = path[path.Count - 1];
-                if (distance <= a.z)
-                {
-                    for (var i = 0; i + 1 < path.Count; i++)
-                        if (path[i + 1].z >= distance)
-                        {
-                            a = path[i]; b = path[i + 1];
-                            fraction = b.z > a.z ? Mathf.Clamp01((distance - a.z) / (b.z - a.z)) : 0;
-                            break;
-                        }
-                    break;
-                }
-                distance -= a.z;
-            }
-            var point = Vector4.LerpUnclamped(a, b, fraction);
-            var original = star.transform.localPosition;
-            star.transform.localPosition = new Vector3(point.x, point.y, original.z);
-            star.transform.localRotation = Quaternion.Euler(0, 0, Mathf.LerpAngle(a.w, b.w, fraction) + 90);
-        }
-        if (fan)
-        {
-            var stars = fields.Field("_baseStarObjs").GetValue<GameObject[]>();
-            var paths = fields.Field("_slideVecList").GetValue<List<Vector4>[]>();
-            for (var i = 0; i < stars.Length; i++) Pose(stars[i], new[] { paths[i] });
-        }
-        else Pose(fields.Field("_baseStarNote").GetValue<GameObject>(), fields.Field("_slideVecListList").GetValue<List<List<Vector4>>>());
-        // A display-only postprocess. No Execute replacement, judge cursor,
-        // touch event, automatic result, arrow removal or score mutation.
+        ApplySlideSvMotionCore(owner, fan, note, touch, value);
     }
 }

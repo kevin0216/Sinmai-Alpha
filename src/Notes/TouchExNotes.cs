@@ -16,8 +16,8 @@ public partial class CustomNoteTypes
     {
         internal sealed class Flag { }
         internal static readonly Flag Value = new();
-        internal static readonly ConditionalWeakTable<NoteData, Flag> Notes = new();
-        internal static readonly ConditionalWeakTable<TouchNoteB, Flag> Owners = new();
+        internal static ConditionalWeakTable<NoteData, Flag> Notes = new ConditionalWeakTable<NoteData, Flag>();
+        internal static ConditionalWeakTable<TouchNoteB, Flag> Owners = new ConditionalWeakTable<TouchNoteB, Flag>();
     }
 
     public struct TouchExReadState

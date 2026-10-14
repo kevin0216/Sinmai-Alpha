@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -11,7 +11,6 @@ using Monitor;
 using Monitor.Game;
 using MelonLoader;
 using UnityEngine;
-using Object = UnityEngine.Object;
 
 namespace SinmaiAlpha.Notes;
 
@@ -39,8 +38,8 @@ public partial class CustomNoteTypes
             Applied = false;
         }
     }
-    private static readonly ConditionalWeakTable<NoteData, VisualPayload> VisualNotes = new();
-    private static readonly ConditionalWeakTable<NotesReader, VisualTimeline> VisualTimelines = new();
+    private static ConditionalWeakTable<NoteData, VisualPayload> VisualNotes = new ConditionalWeakTable<NoteData, VisualPayload>();
+    private static ConditionalWeakTable<NotesReader, VisualTimeline> VisualTimelines = new();
     private static readonly Dictionary<Component, VisualLease> VisualOwners = new();
     private static readonly Dictionary<SpriteRenderer, VisualOverlay> VisualOverlays = new();
     private static readonly HashSet<SpriteRenderer> VisualOverlayRenderers = new();
@@ -144,55 +143,116 @@ public partial class CustomNoteTypes
             RestoreVisualLease(__instance);
             VisualOwners.Remove(__instance);
         }
-        [HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        public static void Postfix(Component __instance, object[] __args)
-        {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
 
-            if (IsBorrowed((NoteData)__args[0])) return;
-            if (!VisualNotes.TryGetValue((NoteData)__args[0], out var payload)) return;
-            bool Empty(VisualValue value) => !value.Color.HasValue && !value.X.HasValue && !value.Alpha.HasValue;
-            var reader = NotesManager.Instance(__instance is NoteBase n ? n.MonitorId : ((SlideRoot)__instance).MonitorId).getReader();
-            if (Empty(payload.Note.Base) && Empty(payload.Note.Guide) &&
-                (!VisualTimelines.TryGetValue(reader, out var timeline) || !timeline.Streams.ContainsKey(payload.Stream))) return;
-            var lease = new VisualLease { Payload = payload,
-                Monitor = __instance is NoteBase note ? note.MonitorId : ((SlideRoot)__instance).MonitorId };
-            var seen = new HashSet<SpriteRenderer>();
-            void Add(SpriteRenderer sprite, bool guide = false)
+
+
+        [HarmonyPostfix]
+        [HarmonyPriority(0)]
+        public static void Postfix(Component __instance, NoteData __0)
+        {
+            if (!FeaturesEnabled(__instance) || IsBorrowed(__0) || !VisualNotes.TryGetValue(__0, out var value))
             {
-                if (sprite != null && !VisualOverlayRenderers.Contains(sprite) && seen.Add(sprite))
-                    lease.Parts.Add(new VisualPart { Native = sprite, Guide = guide, Mine = lease.Payload.Note.Mine });
+                return;
             }
-            void AddObject(GameObject obj, bool guide = false)
+            NotesReader reader = NotesManager.Instance((__instance is NoteBase noteBase) ? noteBase.MonitorId : ((SlideRoot)__instance).MonitorId).getReader();
+            if (Empty(value.Note.Base) && Empty(value.Note.Guide) && (!VisualTimelines.TryGetValue(reader, out var value2) || !value2.Streams.ContainsKey(value.Stream)))
             {
-                if (obj != null) foreach (var sprite in obj.GetComponentsInChildren<SpriteRenderer>(true)) Add(sprite, guide);
+                return;
             }
-            var fields = Traverse.Create(__instance);
+            VisualLease lease = new VisualLease
+            {
+                Payload = value,
+                Monitor = ((__instance is NoteBase noteBase2) ? noteBase2.MonitorId : ((SlideRoot)__instance).MonitorId)
+            };
+            HashSet<SpriteRenderer> seen = new HashSet<SpriteRenderer>();
+            Traverse traverse = Traverse.Create(__instance);
             if (__instance is SlideFan)
             {
-                foreach (var sprite in fields.Field("_spriteLines").GetValue<SpriteRenderer[]>()) Add(sprite);
-                foreach (var sprite in fields.Field("_effectSprites").GetValue<SpriteRenderer[]>()) Add(sprite);
-                foreach (var star in fields.Field("_baseStarObjs").GetValue<GameObject[]>()) AddObject(star, true);
+                SpriteRenderer[] value3 = traverse.Field("_spriteLines").GetValue<SpriteRenderer[]>();
+                for (int i = 0; i < value3.Length; i++)
+                {
+                    Add(value3[i]);
+                }
+                value3 = traverse.Field("_effectSprites").GetValue<SpriteRenderer[]>();
+                for (int i = 0; i < value3.Length; i++)
+                {
+                    Add(value3[i]);
+                }
+                GameObject[] value4 = traverse.Field("_baseStarObjs").GetValue<GameObject[]>();
+                for (int i = 0; i < value4.Length; i++)
+                {
+                    AddObject(value4[i], guide: true);
+                }
             }
             else if (__instance is SlideRoot)
             {
-                foreach (var sprite in fields.Field("_spriteRenders").GetValue<List<SpriteRenderer>>()) Add(sprite);
-                foreach (var arrow in fields.Field("_breakSpriteRenders").GetValue<List<BreakSlide>>()) AddObject(arrow?.gameObject);
-                AddObject(fields.Field("_baseStarNote").GetValue<GameObject>(), true);
+                foreach (SpriteRenderer item in traverse.Field("_spriteRenders").GetValue<List<SpriteRenderer>>())
+                {
+                    Add(item);
+                }
+                foreach (BreakSlide item2 in traverse.Field("_breakSpriteRenders").GetValue<List<BreakSlide>>())
+                {
+                    AddObject(item2?.gameObject);
+                }
+                AddObject(traverse.Field("_baseStarNote").GetValue<GameObject>(), guide: true);
             }
             else
             {
-                var debug = fields.Field("SpriteRenderDebug").GetValue<SpriteRenderer>();
-                foreach (var sprite in __instance.GetComponentsInChildren<SpriteRenderer>(true))
-                    if (sprite != debug && sprite.GetComponentInParent<NoteGuide>() == null) Add(sprite);
-                foreach (var hint in __instance.GetComponentsInChildren<NoteGuide>(true))
+                SpriteRenderer value5 = traverse.Field("SpriteRenderDebug").GetValue<SpriteRenderer>();
+                SpriteRenderer[] value3 = __instance.GetComponentsInChildren<SpriteRenderer>(includeInactive: true);
+                foreach (SpriteRenderer spriteRenderer in value3)
                 {
-                    var line = Traverse.Create(hint).Field("_spriteEachRender").GetValue<SpriteRenderer>();
-                    if (line != null && seen.Add(line))
-                        lease.Parts.Add(new VisualPart { Native = line, Hint = true });
+                    if (spriteRenderer != value5 && spriteRenderer.GetComponentInParent<NoteGuide>() == null)
+                    {
+                        Add(spriteRenderer);
+                    }
+                }
+                NoteGuide[] componentsInChildren = __instance.GetComponentsInChildren<NoteGuide>(includeInactive: true);
+                for (int i = 0; i < componentsInChildren.Length; i++)
+                {
+                    SpriteRenderer value6 = Traverse.Create(componentsInChildren[i]).Field("_spriteEachRender").GetValue<SpriteRenderer>();
+                    if (value6 != null && seen.Add(value6))
+                    {
+                        lease.Parts.Add(new VisualPart
+                        {
+                            Native = value6,
+                            Hint = true
+                        });
+                    }
                 }
             }
             VisualOwners[__instance] = lease;
+            void Add(SpriteRenderer sprite, bool guide = false)
+            {
+                if (sprite != null && !VisualOverlayRenderers.Contains(sprite) && seen.Add(sprite))
+                {
+                    lease.Parts.Add(new VisualPart
+                    {
+                        Native = sprite,
+                        Guide = guide,
+                        Mine = lease.Payload.Note.Mine
+                    });
+                }
+            }
+            void AddObject(GameObject obj, bool guide = false)
+            {
+                if (obj != null)
+                {
+                    SpriteRenderer[] componentsInChildren2 = obj.GetComponentsInChildren<SpriteRenderer>(includeInactive: true);
+                    for (int j = 0; j < componentsInChildren2.Length; j++)
+                    {
+                        Add(componentsInChildren2[j], guide);
+                    }
+                }
+            }
+            static bool Empty(VisualValue visualValue)
+            {
+                if (!visualValue.Color.HasValue && !visualValue.X.HasValue)
+                {
+                    return !visualValue.Alpha.HasValue;
+                }
+                return false;
+            }
         }
     }
 
@@ -246,39 +306,120 @@ public partial class CustomNoteTypes
         foreach (var pair in VisualOwners)
             if (pair.Value.Monitor == __instance.MonitorIndex) RestoreVisualLease(pair.Key);
     }
-    [HarmonyPostfix, HarmonyPriority(Priority.Last), HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
+    [HarmonyPostfix]
+    [HarmonyPriority(0)]
+    [HarmonyPatch(typeof(GameCtrl), "UpdateNotes")]
     public static void AfterVisualFrame(GameCtrl __instance)
     {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-        var reader = NotesManager.Instance(__instance.MonitorIndex).getReader();
-        VisualTimelines.TryGetValue(reader, out var timeline);
-        ApplyReserveVisuals(__instance.MonitorIndex, reader, timeline);
-        foreach (var pair in VisualOwners.ToArray())
+        if (!FeaturesEnabled(__instance))
         {
-            var lease = pair.Value;
-            if (lease.Monitor != __instance.MonitorIndex) continue;
-            if (pair.Key == null || !pair.Key.gameObject.activeInHierarchy || Traverse.Create(pair.Key).Field("EndFlag").GetValue<bool>())
-            { RestoreVisualLease(pair.Key); VisualOwners.Remove(pair.Key); continue; }
-            var payload = lease.Payload;
-            var live = new VisualValue(); var guide = new VisualValue();
-            if (timeline != null && timeline.Streams.TryGetValue(payload.Stream, out var changes))
-            {
-                live = VisualState.Resolve(changes, NotesManager.GetCurrentMsec(), payload.Note);
-                if (payload.Note.Family == "slide") guide = VisualState.Resolve(changes, NotesManager.GetCurrentMsec(), payload.Note, "slidestar");
-            }
-            foreach (var part in lease.Parts)
-                ApplyVisualPart(part, part.Guide ? guide : live, part.Guide ? payload.Note.Guide : payload.Note.Base);
+            return;
+        }
+        NotesReader reader = NotesManager.Instance(__instance.MonitorIndex).getReader();
+        VisualTimelines.TryGetValue(reader, out var value);
+        ApplyReserveVisuals(__instance.MonitorIndex, reader, value);
+        List<KeyValuePair<Component, VisualLease>> list = VisualScratch;
+        list.Clear();
+        foreach (KeyValuePair<Component, VisualLease> visualOwner in VisualOwners)
+        {
+            list.Add(visualOwner);
+        }
+        try
+        {
+            ApplyVisualOwners(list, __instance.MonitorIndex, value);
+        }
+        finally
+        {
+            list.Clear();
         }
     }
 
-    [HarmonyPrefix, HarmonyPatch(typeof(GameCtrl), "ForceNoteCollect")]
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(GameCtrl), "ForceNoteCollect")]
     public static void CollectVisualNotes(GameCtrl __instance)
     {
         RestoreReserveVisuals(__instance.MonitorIndex);
-        foreach (var owner in ReserveVisuals.Where(p => p.Value.Monitor == __instance.MonitorIndex).Select(p => p.Key).ToArray()) ReserveVisuals.Remove(owner);
-        foreach (var pair in VisualOwners.Where(p => p.Value.Monitor == __instance.MonitorIndex).ToArray())
-        { RestoreVisualLease(pair.Key); VisualOwners.Remove(pair.Key); }
-        if (VisualOwners.Count == 0) ClearVisualTintCache();
+        TouchReserve[] array = (from p in ReserveVisuals
+                                where p.Value.Monitor == __instance.MonitorIndex
+                                select p.Key).ToArray();
+        foreach (TouchReserve key in array)
+        {
+            ReserveVisuals.Remove(key);
+        }
+        KeyValuePair<Component, VisualLease>[] array2 = VisualOwners.Where((KeyValuePair<Component, VisualLease> p) => p.Value.Monitor == __instance.MonitorIndex).ToArray();
+        for (int num = 0; num < array2.Length; num++)
+        {
+            KeyValuePair<Component, VisualLease> keyValuePair = array2[num];
+            RestoreVisualLease(keyValuePair.Key);
+            VisualOwners.Remove(keyValuePair.Key);
+        }
+        if (VisualOwners.Count == 0)
+        {
+            // A seek (practice / DebugFeature) used to run the full chart-release ClearVisualTintCache: it destroyed the
+            // tint and gray sprites, the source readbacks and the tint materials and unloaded NoteVisuals.ab, so the
+            // next coloured note paid the bundle load and the each-guide readback + recolour again mid-play. Those are
+            // keyed by content (sprite, colour) and still valid after a seek, and the sprites are only shown through
+            // the overlays (destroyed here) and borrowed carriers (removed by CollectBorrowedNotes, priority 810, for
+            // this monitor), so they now live until GameProcess.OnRelease. Everything bound to renderers is still reset.
+            VisualTintFailures.Clear();
+            ResetVisualOverlays();
+            ResetNoteTintBindings();
+        }
+    }
+
+
+    private static void ResetNoteTintBindings()
+    {
+        foreach (KeyValuePair<SpriteRenderer, Material> borrowedTintDefault in BorrowedTintDefaults)
+        {
+            if (borrowedTintDefault.Key != null)
+            {
+                borrowedTintDefault.Key.sharedMaterial = borrowedTintDefault.Value;
+                borrowedTintDefault.Key.SetPropertyBlock(null);
+            }
+        }
+        BorrowedTintDefaults.Clear();
+        NoteTintBlocks.Clear();
+        TintWarmedReaders.Clear();
+    }
+
+    private static readonly VisualValue VisualLiveScratch = new VisualValue();
+
+    private static readonly VisualValue VisualGuideScratch = new VisualValue();
+
+    private static void ApplyVisualOwners(List<KeyValuePair<Component, VisualLease>> array, int monitorIndex, VisualTimeline value)
+    {
+        for (int i = 0; i < array.Count; i++)
+        {
+            KeyValuePair<Component, VisualLease> keyValuePair = array[i];
+            VisualLease value2 = keyValuePair.Value;
+            if (value2.Monitor != monitorIndex)
+            {
+                continue;
+            }
+            if (keyValuePair.Key == null || !keyValuePair.Key.gameObject.activeInHierarchy || EndFlagOf(keyValuePair.Key))
+            {
+                RestoreVisualLease(keyValuePair.Key);
+                VisualOwners.Remove(keyValuePair.Key);
+                continue;
+            }
+            VisualPayload payload = value2.Payload;
+            VisualValue visualValue = EmptyVisualValue;
+            VisualValue visualValue2 = EmptyVisualValue;
+            if (value != null && value.Streams.TryGetValue(payload.Stream, out var value3))
+            {
+                // Resolved into two per-frame scratch values instead of two new ones per lease: ApplyVisualPart and
+                // ApplyTouchProgressLiveVisual only read them and keep no reference, and Resolve fills every field.
+                visualValue = VisualState.Resolve(value3, NotesManager.GetCurrentMsec(), payload.Note, null, VisualLiveScratch);
+                if (payload.Note.Family == "slide")
+                {
+                    visualValue2 = VisualState.Resolve(value3, NotesManager.GetCurrentMsec(), payload.Note, "slidestar", VisualGuideScratch);
+                }
+            }
+            foreach (VisualPart part in value2.Parts)
+            {
+                ApplyVisualPart(part, part.Guide ? visualValue2 : visualValue, part.Guide ? payload.Note.Guide : payload.Note.Base);
+            }
+        }
     }
 }

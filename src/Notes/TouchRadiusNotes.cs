@@ -16,7 +16,7 @@ public partial class CustomNoteTypes
 {
     private sealed class TouchRadiusValue { public float Radius; }
     private sealed class TouchRadiusLease { public Vector3 Position; public int Monitor; }
-    private static readonly ConditionalWeakTable<NoteData, TouchRadiusValue> TouchRadii = new();
+    private static ConditionalWeakTable<NoteData, TouchRadiusValue> TouchRadii = new ConditionalWeakTable<NoteData, TouchRadiusValue>();
     private static readonly Dictionary<TouchNoteB, TouchRadiusLease> TouchRadiusOwners = new();
     private static string pendingTouchRadius { get => RuntimeCharts.Current.pendingTouchRadius; set => RuntimeCharts.Current.pendingTouchRadius = value; }
 
@@ -81,10 +81,35 @@ public partial class CustomNoteTypes
         [HarmonyPostfix]
         public static void Postfix(GameCtrl __instance)
         {
-        if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
-
-            foreach (var pair in TouchRadiusOwners.Where(p => p.Value.Monitor == __instance.MonitorIndex).ToArray())
-                if (pair.Key == null || !pair.Key.gameObject.activeInHierarchy || pair.Key.IsEnd()) RestoreTouchRadius(pair.Key);
+            if (!FeaturesEnabled(__instance))
+            {
+                return;
+            }
+            int monitorIndex = __instance.MonitorIndex;
+            List<KeyValuePair<TouchNoteB, TouchRadiusLease>> list = TouchRadiusScratch;
+            list.Clear();
+            foreach (KeyValuePair<TouchNoteB, TouchRadiusLease> touchRadiusOwner in TouchRadiusOwners)
+            {
+                if (touchRadiusOwner.Value.Monitor == monitorIndex)
+                {
+                    list.Add(touchRadiusOwner);
+                }
+            }
+            try
+            {
+                for (int num = 0; num < list.Count; num++)
+                {
+                    KeyValuePair<TouchNoteB, TouchRadiusLease> keyValuePair = list[num];
+                    if (keyValuePair.Key == null || !keyValuePair.Key.gameObject.activeInHierarchy || keyValuePair.Key.IsEnd())
+                    {
+                        RestoreTouchRadius(keyValuePair.Key);
+                    }
+                }
+            }
+            finally
+            {
+                list.Clear();
+            }
         }
     }
     [HarmonyPatch(typeof(GameCtrl), "ForceNoteCollect")]

@@ -102,33 +102,27 @@ public sealed class ChartWatermark : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (label == null) return;
-        label.enabled = false;
-        if (owner == null || main == null || !owner.gameObject.activeInHierarchy ||
-            !main.gameObject.activeInHierarchy || main.alpha <= 0 || !CustomNoteTypes.FeaturesForMonitor(owner.MonitorIndex) ||
-            GuiSizes.SinglePlayer && owner.MonitorIndex != 0) return;
-        var mainOnly = GuiSizes.SinglePlayer && SinglePlayer.HideSubMonitor;
-        Rect placement;
-        if (!mainOnly && adjustedSub != null && adjustedSub.isActiveAndEnabled)
+        if (label == null)
         {
-            var banner = ImageBounds(adjustedSub);
-            var scale = banner.width / 1080f;
-            placement = new Rect(banner.xMin + 8 * scale, banner.yMin - 28 * scale, 360 * scale, 28 * scale);
+            return;
         }
-        else if (adjustedMain != null && adjustedMain.isActiveAndEnabled)
-            placement = Place(ImageBounds(adjustedMain), true);
-        else
+        // label.enabled is written only when it changes: turning the label off and back on every
+        // frame made TMP unregister, re-register and fully rebuild its text every frame. Every path
+        // still ends in the same state as before (hidden on every early exit, and on an exception;
+        // otherwise shown with this frame's position, size and font size), and nothing renders
+        // between the old off/on writes.
+        bool show = false;
+        try
         {
-            var frame = !mainOnly && sourceCanvas != null ? sourceCanvas.transform as RectTransform : main.transform as RectTransform;
-            if (frame == null) return;
-            placement = Place(ScreenBounds(frame, sourceCamera), mainOnly);
+            show = PlaceLabel();
         }
-        if (placement.width <= 0 || placement.height <= 0) return;
-        var rect = label.rectTransform;
-        rect.anchoredPosition = new Vector2(placement.xMin, placement.yMax);
-        rect.sizeDelta = placement.size;
-        label.fontSize = 18 * placement.width / 360f;
-        label.enabled = true;
+        finally
+        {
+            if (label.enabled != show)
+            {
+                label.enabled = show;
+            }
+        }
     }
 
     private void OnDisable() { if (label != null) label.enabled = false; }
@@ -138,4 +132,43 @@ public sealed class ChartWatermark : MonoBehaviour
         if (overlay != null) { overlay.SetActive(false); Object.Destroy(overlay); overlay = null; }
     }
     private void OnDestroy() => Stop();
+
+
+    private bool PlaceLabel()
+    {
+        if (owner == null || main == null || !owner.gameObject.activeInHierarchy || !main.gameObject.activeInHierarchy || main.alpha <= 0f || !CustomNoteTypes.FeaturesForMonitor(owner.MonitorIndex) || (GuiSizes.SinglePlayer && owner.MonitorIndex != 0))
+        {
+            return false;
+        }
+        bool flag = GuiSizes.SinglePlayer && SinglePlayer.HideSubMonitor;
+        Rect rect2;
+        if (!flag && adjustedSub != null && adjustedSub.isActiveAndEnabled)
+        {
+            Rect rect = ImageBounds(adjustedSub);
+            float num = rect.width / 1080f;
+            rect2 = new Rect(rect.xMin + 8f * num, rect.yMin - 28f * num, 360f * num, 28f * num);
+        }
+        else if (adjustedMain != null && adjustedMain.isActiveAndEnabled)
+        {
+            rect2 = Place(ImageBounds(adjustedMain), mainOnly: true);
+        }
+        else
+        {
+            RectTransform rectTransform = ((!flag && sourceCanvas != null) ? (sourceCanvas.transform as RectTransform) : (main.transform as RectTransform));
+            if (rectTransform == null)
+            {
+                return false;
+            }
+            rect2 = Place(ScreenBounds(rectTransform, sourceCamera), flag);
+        }
+        if (!(rect2.width <= 0f) && !(rect2.height <= 0f))
+        {
+            RectTransform rectTransform2 = label.rectTransform;
+            rectTransform2.anchoredPosition = new Vector2(rect2.xMin, rect2.yMax);
+            rectTransform2.sizeDelta = rect2.size;
+            label.fontSize = 18f * rect2.width / 360f;
+            return true;
+        }
+        return false;
+    }
 }

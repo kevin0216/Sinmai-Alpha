@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -21,7 +20,7 @@ public partial class CustomNoteTypes
         public bool HeadKnown, TailKnown;
         public float HeadTime, TailTime;
     }
-    private static readonly ConditionalWeakTable<NoteBase, RingCrossingLease> RingCrossings = new();
+    private static ConditionalWeakTable<NoteBase, RingCrossingLease> RingCrossings = new ConditionalWeakTable<NoteBase, RingCrossingLease>();
     private static void ReadRingCommand(string str)
     {
         if (str == null) return;
@@ -94,4 +93,14 @@ public partial class CustomNoteTypes
         RingCrossings.Remove(__instance);
     }
     }
+
+
+    private static readonly VisualPart ReserveScratchPart = new VisualPart
+    {
+        Hint = true
+    };
+
+    private static readonly VisualValue ReserveScratchLive = new VisualValue();
+
+    private static readonly VisualValue ReserveScratchBase = new VisualValue();
 }

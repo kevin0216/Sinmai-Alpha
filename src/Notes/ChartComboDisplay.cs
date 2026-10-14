@@ -1,13 +1,11 @@
-using System;
+using System.Globalization;
 using System.Collections.Generic;
-using System.IO;
 using SinmaiAlpha.ChartVisuals;
 using SinmaiAlpha.Hosting;
 using SinmaiAlpha.Notes.Libs;
 using HarmonyLib;
 using Manager;
 using MAI2.Util;
-using MelonLoader;
 using Monitor;
 using Monitor.Game;
 using UnityEngine;
@@ -22,17 +20,24 @@ public partial class CustomNoteTypes
 
     private static void ApplyComboPresentation(GameMonitor monitor)
     {
-        var reader = NotesManager.Instance(monitor.MonitorIndex).getReader();
-        var main = Traverse.Create(monitor).Field("Main").GetValue<CanvasGroup>();
-        if (GuiSizes.SinglePlayer && monitor.MonitorIndex != 0 || main == null ||
-            !PresentationTimelines.TryGetValue(reader, out var timeline) || timeline.ComboDisplay == null)
-        { ReleaseComboPresentation(monitor); return; }
-        if (timeline.ComboDisplay.Evaluate(NotesManager.GetCurrentMsec()) == ComboDisplayCommands.PlayerDefault)
-        { ReleaseComboPresentation(monitor); return; }
-        if (!ComboDisplays.TryGetValue(monitor, out var display) || display == null)
-            ComboDisplays[monitor] = display = monitor.gameObject.AddComponent<NativeComboDisplay>();
-        var native = Traverse.Create(monitor).Field("GameDispCtrl").GetValue<GameObjectCtrl>();
-        display.Bind(monitor, reader, main, native != null ? native.GetAchiveObj() : null, timeline.ComboDisplay);
+        NotesReader reader = NotesManager.Instance(monitor.MonitorIndex).getReader();
+        CanvasGroup value = MainOf(monitor);
+        if ((GuiSizes.SinglePlayer && monitor.MonitorIndex != 0) || value == null || !PresentationTimelines.TryGetValue(reader, out var value2) || value2.ComboDisplay == null)
+        {
+            ReleaseComboPresentation(monitor);
+            return;
+        }
+        if (value2.ComboDisplay.Evaluate(NotesManager.GetCurrentMsec()) == -1)
+        {
+            ReleaseComboPresentation(monitor);
+            return;
+        }
+        if (!ComboDisplays.TryGetValue(monitor, out var value3) || value3 == null)
+        {
+            value3 = (ComboDisplays[monitor] = monitor.gameObject.AddComponent<NativeComboDisplay>());
+        }
+        GameObjectCtrl value4 = DispCtrlOf(monitor);
+        value3.Bind(monitor, reader, value, (value4 != null) ? value4.GetAchiveObj() : null, value2.ComboDisplay);
     }
     private static void ReleaseComboPresentation(GameMonitor monitor)
     {
@@ -83,7 +88,31 @@ public sealed class NativeComboDisplay : MonoBehaviour
         "_title", "_titleDxScore", "_intNum", "_intNumMain", "_floatNum", "_floatNumMain",
         "_floatNumDenomi", "_floatNumDenomiMain", "_achiveTiele"
     };
-    private T Field<T>(string name) => Traverse.Create(native).Field(name).GetValue<T>();
+    private T Field<T>(string name)
+    {
+        if ((object)native != null)
+        {
+            string[] counterFields = CounterFields;
+            for (int i = 0; i < counterFields.Length; i++)
+            {
+                if (counterFields[i] == name)
+                {
+                    AccessTools.FieldRef<GameAchiveNum, Component> fieldRef = NativeRefs.Counters[i];
+                    if (fieldRef != null)
+                    {
+                        object obj = fieldRef(native);
+                        if (obj == null)
+                        {
+                            return default(T);
+                        }
+                        return (T)obj;
+                    }
+                    break;
+                }
+            }
+        }
+        return Traverse.Create(native).Field(name).GetValue<T>();
+    }
     internal static DB.OptionCenterdisplayID NativeMode(int mode)
     {
         switch (mode)
@@ -137,30 +166,50 @@ public sealed class NativeComboDisplay : MonoBehaviour
     private void OnDestroy()=>Stop();
     private void Show(string field,bool visible)
     { var root=Field<Component>(field); if(root!=null&&root.gameObject.activeSelf!=visible)root.gameObject.SetActive(visible); }
-    private void Text(string field,string value)
+    private void Text(string field, string value)
     {
-        var counter=Field<SpriteCounter>(field);
-        if(counter==null)return;
-        // Clear unused digits on every update. Long classic scores can exceed
-        // the original combo counter width, so extend its native digit frames.
-        if(value.Length>counter.FrameList.Count)
+        SpriteCounter spriteCounter = Field<SpriteCounter>(field);
+        if (spriteCounter == null)
         {
-            if(!numberLeases.ContainsKey(counter)) numberLeases[counter]=new NumberLease { Count=counter.FrameList.Count, Size=counter.rectTransform.sizeDelta };
-            while(counter.FrameList.Count<value.Length)
+            return;
+        }
+        if (value.Length > spriteCounter.FrameList.Count)
+        {
+            if (!numberLeases.ContainsKey(spriteCounter))
             {
-                var count=counter.FrameList.Count;
-                counter.AddFormatFream();
-                if(counter.FrameList.Count==count)break;
-                if(count>0)
+                numberLeases[spriteCounter] = new NumberLease
                 {
-                    var previous=counter.FrameList[count-1]; var added=counter.FrameList[count];
-                    added.Scale=previous.Scale; added.AnimationScale=previous.AnimationScale;
-                    if(counter.BetweenList.Count>1) counter.BetweenList[counter.BetweenList.Count-1].Size=counter.BetweenList[counter.BetweenList.Count-2].Size;
+                    Count = spriteCounter.FrameList.Count,
+                    Size = spriteCounter.rectTransform.sizeDelta
+                };
+            }
+            while (spriteCounter.FrameList.Count < value.Length)
+            {
+                int count = spriteCounter.FrameList.Count;
+                spriteCounter.AddFormatFream();
+                if (spriteCounter.FrameList.Count == count)
+                {
+                    break;
+                }
+                if (count > 0)
+                {
+                    SpriteCounterData spriteCounterData = spriteCounter.FrameList[count - 1];
+                    SpriteCounterData spriteCounterData2 = spriteCounter.FrameList[count];
+                    spriteCounterData2.Scale = spriteCounterData.Scale;
+                    spriteCounterData2.AnimationScale = spriteCounterData.AnimationScale;
+                    if (spriteCounter.BetweenList.Count > 1)
+                    {
+                        spriteCounter.BetweenList[spriteCounter.BetweenList.Count - 1].Size = spriteCounter.BetweenList[spriteCounter.BetweenList.Count - 2].Size;
+                    }
                 }
             }
         }
-        value=value.PadLeft(counter.FrameList.Count);
-        if(Traverse.Create(counter).Field("mainText").GetValue<string>()!=value)counter.ChangeText(value);
+        value = value.PadLeft(spriteCounter.FrameList.Count);
+        AccessTools.FieldRef<SpriteCounter, string> mainText = NativeRefs.MainText;
+        if (((mainText != null) ? mainText(spriteCounter) : Traverse.Create(spriteCounter).Field("mainText").GetValue<string>()) != value)
+        {
+            spriteCounter.ChangeText(value);
+        }
     }
     private void SetLayout(int mode)
     {
@@ -189,27 +238,100 @@ public sealed class NativeComboDisplay : MonoBehaviour
     }
     private void LateUpdate()
     {
-        if(!enabled||owner==null||native==null||track==null)return;
-        var mode=track.Evaluate(NotesManager.GetCurrentMsec());
-        if(mode==ComboDisplayCommands.PlayerDefault) { Stop(); return; }
-        if(mode!=previousMode) { SetLayout(mode); previousMode=mode; }
-        if(mode==0) { foreach(var name in CounterFields) Show(name,false); return; }
-        // Classic score/rate modes have no native settings enum. Their values
-        // use the existing read-only native score adapter and native number sprites.
-        if(mode==2||mode==3||mode==4||mode==101||mode==102)
+        if (!enabled || owner == null || native == null || track == null)
         {
-            var manager=Singleton<GamePlayManager>.Instance;
-            var data=NativeComboValues.CaptureSession(manager.GetGameScore(owner.MonitorIndex),manager.GetGameScore(1-owner.MonitorIndex));
-            if(mode==3||mode==4)
+            return;
+        }
+        int num = track.Evaluate(NotesManager.GetCurrentMsec());
+        if (num == -1)
+        {
+            Stop();
+            return;
+        }
+        if (num != previousMode)
+        {
+            SetLayout(num);
+            previousMode = num;
+        }
+        switch (num)
+        {
+            case 0:
+                {
+                    string[] counterFields = CounterFields;
+                    foreach (string field in counterFields)
+                    {
+                        Show(field, visible: false);
+                    }
+                    break;
+                }
+            case 2:
+            case 3:
+            case 4:
+            case 101:
+            case 102:
+                {
+                    GamePlayManager instance = Singleton<GamePlayManager>.Instance;
+                    // Only mode 4 reads AchievementDownClassic, the one value that needs the per-note loss walk.
+                    NativeComboValues nativeComboValues = NativeComboValues.CaptureSession(instance.GetGameScore(owner.MonitorIndex), instance.GetGameScore(1 - owner.MonitorIndex), num == 4);
+                    long num2;
+                    switch (num)
+                    {
+                        case 3:
+                        case 4:
+                            {
+                                string[] array = nativeComboValues.Rate(num).ToString("0.0000", CultureInfo.InvariantCulture).Split('.');
+                                Text("_floatNum", array[0].PadLeft(3));
+                                Text("_floatNumMain", array[0].PadLeft(3));
+                                Text("_floatNumDenomi", "." + array[1] + "%");
+                                Text("_floatNumDenomiMain", "." + array[1] + "%");
+                                return;
+                            }
+                        default:
+                            num2 = nativeComboValues.NormalizedDownScore;
+                            break;
+                        case 101:
+                            num2 = nativeComboValues.NormalizedScore;
+                            break;
+                        case 2:
+                            num2 = nativeComboValues.Score;
+                            break;
+                    }
+                    long num3 = num2;
+                    string value = num3.ToString(CultureInfo.InvariantCulture);
+                    Text("_intNum", value);
+                    Text("_intNumMain", value);
+                    break;
+                }
+        }
+    }
+
+
+    internal static class NativeRefs
+    {
+        internal static readonly AccessTools.FieldRef<GameAchiveNum, Component>[] Counters = BuildCounters();
+
+        internal static readonly AccessTools.FieldRef<SpriteCounter, string> MainText = TryFieldRef<SpriteCounter, string>("mainText");
+
+        private static AccessTools.FieldRef<GameAchiveNum, Component>[] BuildCounters()
+        {
+            string[] counterFields = CounterFields;
+            AccessTools.FieldRef<GameAchiveNum, Component>[] array = new AccessTools.FieldRef<GameAchiveNum, Component>[counterFields.Length];
+            for (int i = 0; i < counterFields.Length; i++)
             {
-                var rate=data.Rate(mode).ToString("0.0000",System.Globalization.CultureInfo.InvariantCulture).Split('.');
-                Text("_floatNum",rate[0].PadLeft(3)); Text("_floatNumMain",rate[0].PadLeft(3));
-                Text("_floatNumDenomi","."+rate[1]+"%"); Text("_floatNumDenomiMain","."+rate[1]+"%");
+                array[i] = TryFieldRef<GameAchiveNum, Component>(counterFields[i]);
             }
-            else
+            return array;
+        }
+
+        private static AccessTools.FieldRef<T, F> TryFieldRef<T, F>(string name) where T : class
+        {
+            try
             {
-                var value=(mode==2?data.Score:mode==101?data.NormalizedScore:data.NormalizedDownScore).ToString(System.Globalization.CultureInfo.InvariantCulture);
-                Text("_intNum",value); Text("_intNumMain",value);
+                return AccessTools.FieldRefAccess<T, F>(name);
+            }
+            catch (System.Exception)
+            {
+                return null;
             }
         }
     }
