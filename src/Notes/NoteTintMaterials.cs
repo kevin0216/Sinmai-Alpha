@@ -24,12 +24,21 @@ public partial class CustomNoteTypes
     [HarmonyLib.HarmonyPatch(typeof(Monitor.Game.GameCtrl), "IsReady")]
     public static class NoteTintWarmupPatch
     {
-        public static void Postfix(Monitor.Game.GameCtrl __instance, bool __result)
+        public static void Postfix(Monitor.Game.GameCtrl __instance, ref bool __result)
         {
-            if (!__result || !FeaturesEnabled(__instance)) return;
+            if (!__result || GameManager.IsAdvDemo || !FeaturesEnabled(__instance)) return;
             var reader = Manager.NotesManager.Instance(__instance.MonitorIndex)?.getReader();
             if (reader == null || TintWarmedReaders.Contains((__instance, reader))) return;
-            // CPU each-guide baking is spread across loading frames by EachGuideTintPrewarmPatch.
+            try
+            {
+                if (!WarmHintTints(__instance, reader)) { __result = false; return; }
+            }
+            catch (System.Exception e)
+            {
+                TintWarmedReaders.Add((__instance, reader));
+                MelonLoader.MelonLogger.Warning("[Note Visual] Tint warmup skipped: " + e.Message);
+                return; // A failed optimization must not trap the player on the loading screen.
+            }
             var sprite = Process.GameNoteImageContainer.NormalTap[0];
             if (sprite == null) return;
             var obj = new GameObject("Sinmai-Alpha tint warmup");

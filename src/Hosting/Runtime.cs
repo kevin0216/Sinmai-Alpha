@@ -8,7 +8,7 @@ using System.Runtime.Serialization.Json;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(SinmaiAlpha.Plugin), "Sinmai-Alpha", "0.1.6", "SaltNya")]
+[assembly: MelonInfo(typeof(SinmaiAlpha.Plugin), "Sinmai-Alpha", "0.2.1", "SaltNya")]
 [assembly: MelonGame("sega-interactive", "Sinmai")]
 [assembly: MelonPriority(-10000)]
 [assembly: HarmonyDontPatchAll]
@@ -28,6 +28,7 @@ namespace SinmaiAlpha
             var roots = new List<Type> { typeof(Difficulty.AlphaRights), typeof(Difficulty.ExtraMode) };
             if (settings.ChartFeatures) roots.AddRange(new[] { typeof(Notes.CustomNoteTypes), typeof(Notes.ExtendNotesPool), typeof(Notes.ReviveFinaleVSlide), typeof(Notes.TapInHoldFix) });
             if (settings.ExtraDifficulty) roots.Add(typeof(Difficulty.ExtraDifficulty));
+            if (settings.Artwork.Enabled) roots.Add(typeof(Artwork.DirectArtwork));
             if (Hosting.GameplayDiagnostics.Enabled) { Hosting.GameplayDiagnostics.Start(); roots.Add(typeof(Hosting.GameplayDiagnostics)); }
             var count = 0;
             try
@@ -41,11 +42,21 @@ namespace SinmaiAlpha
             catch (Exception error)
             {
                 HarmonyInstance.UnpatchSelf();
+                Artwork.DirectArtwork.Shutdown();
                 MelonLogger.Error("[Sinmai-Alpha] Initialization failed: " + error);
                 throw;
             }
         }
-        public override void OnDeinitializeMelon() => Hosting.GameplayDiagnostics.Stop();
+        public override void OnLateInitializeMelon()
+        {
+            // KALEIDXSCOPE loads its copied controller after Alpha's early patches.
+            Compatibility.KaleidxScopeGeometry.Initialize(HarmonyInstance);
+        }
+        public override void OnDeinitializeMelon()
+        {
+            Hosting.GameplayDiagnostics.Stop();
+            Artwork.DirectArtwork.Shutdown();
+        }
         private void Apply(Type type, ref int count)
         {
             Lifecycle(type, "OnBeforePatch");
@@ -80,31 +91,6 @@ namespace SinmaiAlpha.Hosting
             var path = Path.GetFullPath(Path.Combine(Root, relative));
             if (!path.StartsWith(Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Asset path leaves Sinmai-Alpha");
             return File.Exists(path) ? File.OpenRead(path) : null;
-        }
-    }
-    [DataContract]
-    public sealed class Settings
-    {
-        [DataMember] public bool ChartFeatures = true;
-        [DataMember] public bool ExtraDifficulty = true;
-        [DataMember] public bool ShowMineHitFeedback = true;
-        [DataMember] public float MineVolume = .7f;
-        [DataMember] public int ExtraPoolCount = 128;
-        // null follows an installed display adapter; true/false is an explicit
-        // hint for cabinets whose single-screen mod exposes no public setting.
-        [DataMember] public bool? SinglePlayer = null;
-        [DataMember] public bool HideSubMonitor = false;
-        [DataMember] public bool ShowSssJudgePath = false;
-        [DataMember] public bool GameplayDiagnostics = false;
-        public static Settings Current { get; private set; } = new Settings();
-        [OnDeserializing] private void Defaults(StreamingContext context)
-        { ChartFeatures = ExtraDifficulty = ShowMineHitFeedback = true; MineVolume = .7f; ExtraPoolCount = 128; ShowSssJudgePath = GameplayDiagnostics = false; }
-        public static void Load()
-        {
-            var path = Path.Combine(AssetFiles.Root, "config.json");
-            if (!File.Exists(path)) return;
-            try { using var stream = File.OpenRead(path); Current = (Settings)new DataContractJsonSerializer(typeof(Settings)).ReadObject(stream); }
-            catch (Exception error) { MelonLogger.Warning("[Sinmai-Alpha] Invalid config, using defaults: " + error.Message); }
         }
     }
     public static class GuiSizes

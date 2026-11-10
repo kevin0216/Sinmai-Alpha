@@ -59,7 +59,8 @@ public partial class CustomNoteTypes
     }
 
     // UpdateCtrl pools notes before Initialize, so this uses load-time data.
-    // Native pools impose a 10-second lead ceiling; judgment timing is unchanged.
+    // Ring pools are prewarmed from this same activation window. Long frozen
+    // or reversing decorations must not be truncated to the old 10-second cap.
     private static float SvScaleActivationLead(float lead, float leadDiv, NoteData note)
     {
         if (note == null)
@@ -293,9 +294,9 @@ public partial class CustomNoteTypes
             return TouchVisualActivationLead(note.indexNote, note.time.msec, lead / leadDiv, lead);
         }
         float ringFirstVisibleTimeCached = GetRingFirstVisibleTimeCached(note, lead / leadDiv);
-        if (!float.IsNaN(ringFirstVisibleTimeCached))
+        if (!float.IsNaN(ringFirstVisibleTimeCached) && !float.IsInfinity(ringFirstVisibleTimeCached))
         {
-            return Math.Min(10000f, Math.Max(lead, note.time.msec - ringFirstVisibleTimeCached));
+            return Math.Max(lead, note.time.msec - ringFirstVisibleTimeCached);
         }
         return lead;
     }

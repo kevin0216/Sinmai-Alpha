@@ -28,24 +28,33 @@ internal static class Program
         double time = .5;
         Set(display, "Clock", (Func<double>)(() => time)); Set(display, "timeline", timeline);
         Set(display, "visible", visible); Set(display, "styles", styles);
+        var knownVisible = new bool[33]; var starts = new double[33]; var ends = new double[33];
         var sizes = new Vector2[33]; var colors = new Color32[33];
+        bool valid = false, lastAnimated = false; double lastTime = double.NaN;
+        // Mirrors NoiseZoneCompositor.Prepare's rebuild condition (owner, geometry
+        // and matrices held constant).
         bool Changed()
         {
-            object[] args = { sizes, colors, false };
-            var bits = (ulong)Call(display, "ActiveMaskState", args);
-            Check(bits == (visible[0] ? 1UL : 0UL), "active sensor bits");
-            return (bool)args[2];
+            object[] args = { time, knownVisible, starts, ends, sizes, colors, false };
+            var same = (bool)Call(display, "ActiveMaskStateMatches", args);
+            var animated = (bool)args[6];
+            Check(knownVisible[0] == visible[0] && (!visible[0] || timeline.TryGetVisualSpan(0, time, out _, out _)), "visible sensor state");
+            var rebuild = !valid || !same || animated != lastAnimated || animated && lastTime != time;
+            valid = true; lastAnimated = animated; lastTime = time;
+            return rebuild;
         }
         Check(Changed(), "initial style populates cache");
         Check(!Changed(), "steady zone reuses raster");
         time = .1; Check(Changed(), "growth redraws on seek");
         time = 1.9; Check(Changed(), "shrink redraws");
-        time = 1.7; Check(!Changed(), "stable middle after rewind");
+        time = 1.7; Check(Changed(), "first stable frame replaces the animated raster");
+        Check(!Changed(), "stable middle after rewind");
         styles.SetValue(Activator.CreateInstance(visualType, new object[] { new VisualValue { Color = 0x123456 } }), 0);
         Check(Changed(), "live color invalidates mask"); Check(!Changed(), "unchanged color reuses mask");
         styles.SetValue(Activator.CreateInstance(visualType, new object[] { new VisualValue { Color = 0x123456, X = 2, Y = -1, Alpha = .5f } }), 0);
         Check(Changed(), "live size and alpha invalidate mask");
         timeline.Configure(new[] { new NoiseZoneEvent(0, 0, .05, 1) }); time = .08;
+        Check(Changed(), "a new span rebuilds once");
         Check(!Changed(), "short visual pulse has no growth window");
         visible[0] = false; Changed();
 

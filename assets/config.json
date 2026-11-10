@@ -1,4 +1,4 @@
-﻿{
+{
   "ChartFeatures": true,
   "ExtraDifficulty": true,
   "ShowMineHitFeedback": true,
@@ -7,5 +7,17 @@
   "SinglePlayer": null,
   "HideSubMonitor": false,
   "ShowSssJudgePath": false,
-  "GameplayDiagnostics": false
+  "ExperimentalSlideJudgment": false,
+  "GameplayDiagnostics": false,
+  "Artwork": {
+    "Enabled": false,
+    "EnableJackets": true,
+    "EnableFrames": true,
+    "EnableIcons": true,
+    "EnableNamePlates": true,
+    "EnableImages": true,
+    "EnableGif": true,
+    "EnableVideo": true,
+    "Directory": "LocalAssets"
+  }
 }

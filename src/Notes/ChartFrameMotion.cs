@@ -397,18 +397,29 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
     private void CollectScreenClipRenderers(GameObject background)
     {
         screenClipRenderers.Clear();
-        if (background == null)
+        if (background == null || ScreenClipType == null)
         {
             return;
         }
-        Renderer[] componentsInChildren = background.GetComponentsInChildren<Renderer>(includeInactive: true);
-        foreach (Renderer renderer in componentsInChildren)
+        // Query the rare 1.70 setter components directly (inactive included) instead of a
+        // name lookup on every background renderer; this runs for each isolated render.
+        foreach (Component setter in background.GetComponentsInChildren(ScreenClipType, includeInactive: true))
         {
-            if (!(renderer == null) && !(renderer.GetComponent("ScreenClipSetter") == null))
+            if (setter == null)
             {
-                screenClipRenderers.Add(renderer);
+                continue;
+            }
+            screenClipComponents.Clear();
+            setter.GetComponents(screenClipComponents);
+            foreach (Renderer renderer in screenClipComponents)
+            {
+                if (renderer != null && !screenClipRenderers.Contains(renderer))
+                {
+                    screenClipRenderers.Add(renderer);
+                }
             }
         }
+        screenClipComponents.Clear();
     }
 
     private void LeaseScreenClips(PresentationRect viewport)
@@ -431,14 +442,12 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
                 float num2 = screenClipProperties.GetFloat(ClipMaxX);
                 if (!float.IsNaN(num) && !float.IsNaN(num2) && !float.IsInfinity(num) && !float.IsInfinity(num2) && !(num2 <= num))
                 {
-                    ScreenClipLease screenClipLease = new ScreenClipLease
-                    {
-                        Owner = renderer,
-                        Min = num,
-                        Max = num2,
-                        AppliedMin = (num - viewport.X) / viewport.Width,
-                        AppliedMax = (num2 - viewport.X) / viewport.Width
-                    };
+                    ScreenClipLease screenClipLease = (spareScreenClipLeases.Count == 0) ? new ScreenClipLease() : spareScreenClipLeases.Pop();
+                    screenClipLease.Owner = renderer;
+                    screenClipLease.Min = num;
+                    screenClipLease.Max = num2;
+                    screenClipLease.AppliedMin = (num - viewport.X) / viewport.Width;
+                    screenClipLease.AppliedMax = (num2 - viewport.X) / viewport.Width;
                     screenClipLeases.Add(screenClipLease);
                     screenClipProperties.SetFloat(ClipMinX, screenClipLease.AppliedMin);
                     screenClipProperties.SetFloat(ClipMaxX, screenClipLease.AppliedMax);

@@ -349,6 +349,9 @@ public partial class CustomNoteTypes
             List<SpriteRenderer> value2 = Traverse.Create(instance).Field("_arrowObjectList").GetValue<List<SpriteRenderer>>();
             if (TryGetMirrorPoolSize(value2, nativeCounts, "_arrowObjectList", out var value3))
             {
+                // Prewarm at least 1024 per type; longer connected mine paths
+                // receive additional arrows after the chart manager is attached.
+                value3 = Math.Max(value3, DefaultMineArrowCapacity);
                 List<SpriteRenderer> list = new List<SpriteRenderer>();
                 for (int i = 0; i < value3; i++)
                 {
@@ -364,6 +367,7 @@ public partial class CustomNoteTypes
             {
                 return;
             }
+            value5 = Math.Max(value5, DefaultMineArrowCapacity);
             List<BreakSlide> list2 = new List<BreakSlide>();
             for (int j = 0; j < value5; j++)
             {

@@ -23,16 +23,15 @@ internal static class ChartFeatureGate
     internal static void RegisterExtensions(IEnumerable<string> names) => Extensions.UnionWith(names.Where(n => !NativeFields.ContainsKey(n) && !Ignored.Contains(n)));
     private static readonly bool[] Selected = new bool[2];
     private static readonly bool?[] HoldTap = new bool?[2];
-    internal static bool AllowTapInHold(int monitor, bool defaultValue = false) => monitor >= 0 && monitor < HoldTap.Length ? HoldTap[monitor] ?? defaultValue : defaultValue;
+    // Other Alpha extensions do not opt a chart into different input ordering.
+    internal static bool AllowTapInHold(int monitor) => monitor >= 0 && monitor < HoldTap.Length && HoldTap[monitor] == true;
     internal static bool DetectHoldTap(string path, int difficulty) => DetectHoldTapOverride(path, difficulty) == true;
     internal static bool? DetectHoldTapOverride(string path, int difficulty)
     {
         if (string.IsNullOrWhiteSpace(path) || IsA000(path)) return null;
         try {
             path = FileSystem.ResolvePath(path);
-            var marker = Path.ChangeExtension(path, ".ExtraDifficulty.flag");
-            if (!File.Exists(marker) && difficulty == 3) marker = Path.Combine(Path.GetDirectoryName(path), "ExtraDifficulty.flag");
-            return File.Exists(marker) ? ChartFlags.Parse(File.ReadAllText(marker)).TapInHoldOverride : null;
+            return ChartMetadata.Read(path, difficulty, message => MelonLoader.MelonLogger.Warning("[Chart Metadata] " + message))?.TapInHoldOverride;
         } catch (IOException) { return null; } catch (UnauthorizedAccessException) { return null; } catch (ArgumentException) { return null; }
     }
     internal static bool AnySelected => Selected[0] || Selected[1];

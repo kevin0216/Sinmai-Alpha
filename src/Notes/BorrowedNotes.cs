@@ -29,6 +29,7 @@ public partial class CustomNoteTypes
         public NoteData Note;
         public int Monitor;
         public bool Standalone;
+        public readonly VisualValue Live = new(), Look = new();
         public SpriteRenderer Body, Guide;
         public Sprite Model, Picture, GuidePicture, TouchPetalPicture;
         public SpriteRenderer[] TouchPetals;
@@ -357,18 +358,17 @@ public partial class CustomNoteTypes
             bool flag2 = route.Family == "star" || route.Family == "hold" || route.Family == "touchhold";
             value2.Body.transform.localRotation = UnityEngine.Quaternion.Euler(0f, 0f, flag2 ? (Mathf.Atan2(vector2.y, vector2.x) * 57.29578f + 18f) : 0f);
             VisualNote visualNote = BorrowedVisual(note, route);
-            VisualValue visualValue = new VisualValue();
+            // Per-lease values: no VisualValue allocations per borrowed note per frame.
+            VisualValue visualValue = ResetVisualValue(value2.Live);
             if (value != null && value.Streams.TryGetValue(VisualNotes.TryGetValue(note, out var value3) ? value3.Stream : "", out var value4))
             {
-                visualValue = VisualState.Resolve(value4, currentMsec, visualNote);
+                VisualState.Resolve(value4, currentMsec, visualNote, null, visualValue);
             }
-            VisualValue visualValue2 = new VisualValue
-            {
-                Color = (visualValue.Color ?? visualNote.Base.Color),
-                Alpha = (visualValue.Alpha ?? visualNote.Base.Alpha),
-                X = (visualValue.X ?? visualNote.Base.X),
-                Y = (visualValue.Y ?? visualNote.Base.Y)
-            };
+            VisualValue visualValue2 = value2.Look;
+            visualValue2.Color = visualValue.Color ?? visualNote.Base.Color;
+            visualValue2.Alpha = visualValue.Alpha ?? visualNote.Base.Alpha;
+            visualValue2.X = visualValue.X ?? visualNote.Base.X;
+            visualValue2.Y = visualValue.Y ?? visualNote.Base.Y;
             float num3 = ((route.Family == "star") ? 1.5f : 1f);
             value2.Body.transform.localScale = new UnityEngine.Vector3(num3 * (visualValue2.X ?? 1f), num3 * (visualValue2.Y ?? 1f), 1f);
             if ((route.Family == "touch" || route.Family == "touchhold") && visualNote.Break && !visualValue2.Color.HasValue)

@@ -24,41 +24,25 @@ public static partial class ExtraDifficulty
 
     private static ChartFlags CustomLevelFlags(MusicIdentity identity, int difficulty)
     {
-        // Both marker names opened below live in the chart folder the boot scan found without any
-        // *ExtraDifficulty.flag (same ids, difficulties and folder transform), so the result would be null.
-        if (noThemes)
-        {
-            return null;
-        }
-        if (identity == null || identity.Utage || identity.Id <= 0 || identity.Id >= 100000 || difficulty < 0 || difficulty > 4)
-        {
-            return null;
-        }
-        MusicData music = Singleton<DataManager>.Instance.GetMusic(identity.Id);
-        if (music?.notesData == null || difficulty >= music.notesData.Count)
-        {
-            return null;
-        }
-        string text = music.notesData[difficulty]?.file?.path;
-        if (string.IsNullOrEmpty(text) || ChartFeatureGate.IsA000(text))
-        {
-            return null;
-        }
-        string path = FileSystem.ResolvePath(text);
-        string text2 = System.IO.Path.ChangeExtension(path, ".ExtraDifficulty.flag");
-        if (!File.Exists(text2) && difficulty == 3)
-        {
-            text2 = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), "ExtraDifficulty.flag");
-        }
-        return ReadLevelFlags(text2);
+        // The boot scan found no flag file or Music.xml metadata in any chart folder
+        // (same ids, difficulties and folder transform), so the result would be null.
+        if (noThemes) return null;
+        if (identity == null || identity.Utage || identity.Id <= 0 || identity.Id >= 100000 || difficulty < 0 || difficulty > 4) return null;
+        var music = Singleton<DataManager>.Instance.GetMusic(identity.Id);
+        if (music?.notesData == null || difficulty >= music.notesData.Count) return null;
+        var path = music.notesData[difficulty]?.file?.path;
+        if (string.IsNullOrEmpty(path) || ChartFeatureGate.IsA000(path)) return null;
+        var chart = FileSystem.ResolvePath(path);
+        return ReadLevelFlags(chart, difficulty);
     }
-    private static ChartFlags ReadLevelFlags(string marker)
+    private static ChartFlags ReadLevelFlags(string chart, int difficulty)
     {
-        if (LevelFlags.TryGetValue(marker, out var flags)) return flags;
-        try { flags = File.Exists(marker) ? ChartFlags.Parse(File.ReadAllText(marker)) : null; }
+        var key = chart + "|" + difficulty;
+        if (LevelFlags.TryGetValue(key, out var flags)) return flags;
+        try { flags = ChartMetadata.Read(chart, difficulty, message => MelonLogger.Warning("[CustomLevelText] " + message)); }
         catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
         { MelonLogger.Warning("[CustomLevelText] " + e.Message); }
-        LevelFlags[marker] = flags; return flags;
+        LevelFlags[key] = flags; return flags;
     }
     private static void BindLevelText(object owner, int difficulty, bool utage, DifficultyTheme theme)
     {

@@ -53,6 +53,9 @@ public static partial class ExtraDifficulty
 
         private const uint NotifyDirName = 2u;
 
+        // Music.xml metadata is added by editing an existing file.
+        private const uint NotifyLastWrite = 16u;
+
         private const uint WaitTimeout = 258u;
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "FindFirstChangeNotificationW", ExactSpelling = true)]
@@ -66,7 +69,7 @@ public static partial class ExtraDifficulty
 
         internal static bool Add(List<IntPtr> handles, string folder, bool subtree)
         {
-            IntPtr intPtr = FindFirstChangeNotification(folder, subtree, NotifyFileName | NotifyDirName);
+            IntPtr intPtr = FindFirstChangeNotification(folder, subtree, NotifyFileName | NotifyDirName | NotifyLastWrite);
             if (intPtr == IntPtr.Zero || intPtr == new IntPtr(-1))
             {
                 return false;
@@ -155,9 +158,27 @@ public static partial class ExtraDifficulty
         return directoryName;
     }
 
+    // ChartMetadata.Read also takes settings from the nearest Music.xml (same walk), so
+    // a folder whose Music.xml mentions the element keeps the theme hooks active.
     private static bool FolderHasFlag(string folder)
     {
-        return Directory.GetFiles(folder, "*" + MarkerFileName).Length != 0;
+        if (Directory.GetFiles(folder, "*" + MarkerFileName).Length != 0)
+        {
+            return true;
+        }
+        for (DirectoryInfo directory = new DirectoryInfo(folder); directory != null; directory = directory.Parent)
+        {
+            string xml = System.IO.Path.Combine(directory.FullName, "Music.xml");
+            if (File.Exists(xml))
+            {
+                return File.ReadAllText(xml).IndexOf(SinmaiAlpha.Assets.ChartMetadata.ElementName, StringComparison.Ordinal) >= 0;
+            }
+            if (directory.Name.Equals("StreamingAssets", StringComparison.OrdinalIgnoreCase) || directory.Name.Equals("music", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static string WatchFolder(string musicFolder)
@@ -285,7 +306,7 @@ public static partial class ExtraDifficulty
                 noThemes = false;
                 throw;
             }
-            SinmaiAlpha.Compatibility.SafeLog.Msg("[ExtraDifficulty] No " + MarkerFileName + " next to any of " + num + " songs; theme hooks idle until an option folder changes");
+            SinmaiAlpha.Compatibility.SafeLog.Msg("[ExtraDifficulty] No " + MarkerFileName + " or Music.xml metadata next to any of " + num + " songs; theme hooks idle until an option folder changes");
         }
         finally
         {

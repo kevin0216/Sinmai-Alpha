@@ -90,6 +90,9 @@ public sealed class ReferenceSubtitleDisplay : MonoBehaviour
         public bool Rebuilt;
 
         public float BuiltScale = float.NaN;
+
+        // Root size the label was last placed for; PlaceLabel reruns only when it changes.
+        public Vector2 PlacedFor = new Vector2(float.NaN, float.NaN);
     }
     private GameMonitor owner;
     private CanvasGroup main;
@@ -154,15 +157,11 @@ public sealed class ReferenceSubtitleDisplay : MonoBehaviour
             textMeshProUGUI.text = change.Text;
             textMeshProUGUI.fontSize = ((change.Size > 0f) ? change.Size : 32f);
             textMeshProUGUI.fontStyle = StyleFor(change);
-            textMeshProUGUI.alignment = TextAlignmentOptions.Center;
+            textMeshProUGUI.alignment = TextAlignmentOptions.TopLeft;
             textMeshProUGUI.enableWordWrapping = true;
             textMeshProUGUI.richText = false;
             textMeshProUGUI.raycastTarget = false;
-            RectTransform rectTransform2 = textMeshProUGUI.rectTransform;
-            rectTransform2.anchorMin = Vector2.zero;
-            rectTransform2.anchorMax = Vector2.one;
-            offsetMin = (rectTransform2.offsetMax = Vector2.zero);
-            rectTransform2.offsetMin = offsetMin;
+            PlaceLabel(textMeshProUGUI.rectTransform, change);
             // Before the first ForceMeshUpdate (same font chain and state it would see), add every glyph these
             // labels will add to a dynamic fallback font in one batch instead of one upload and kerning scan per
             // glyph (see GlyphPreload). The ForceMeshUpdate calls then find them already present.
@@ -857,12 +856,28 @@ public sealed class ReferenceSubtitleDisplay : MonoBehaviour
                     rebuilt = true;
                 }
                 value.Text.color = color;
-                value.Text.rectTransform.anchoredPosition = new Vector2(item.X * root.rect.width, (-item.Y) * root.rect.height);
+                Vector2 size = root.rect.size;
+                if (value.PlacedFor != size)
+                {
+                    PlaceLabel(value.Text.rectTransform, item);
+                    value.PlacedFor = size;
+                }
                 value.Text.enabled = true;
                 value.Rebuilt = rebuilt;
                 current.Add(value);
             }
         }
+    }
+
+    private void PlaceLabel(RectTransform rect, SubtitleChange ev)
+    {
+        // Majdata's TEXT coordinates originate at the play area's top-left.
+        // Retain its inset and remaining-area wrapping bounds when resized.
+        rect.anchorMin = rect.anchorMax = new Vector2(ev.X, 1f - ev.Y);
+        rect.pivot = new Vector2(0, 1);
+        rect.anchoredPosition = new Vector2(20, -20);
+        rect.sizeDelta = new Vector2(Mathf.Max(50, root.rect.width * (1f - ev.X) - 40),
+            Mathf.Max(100, root.rect.height * (1f - ev.Y) - 40));
     }
 
     private void RebuildRescaled()

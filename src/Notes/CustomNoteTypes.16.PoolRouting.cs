@@ -161,6 +161,9 @@ public partial class CustomNoteTypes
 
     private sealed class PoolRoute
     {
+        internal GameCtrl Controller;
+        internal NoteData Note;
+        internal bool ArrowsPrepared;
         internal CustomNoteKind Kind;
         internal HashSet<string> Fields;
     }
@@ -179,7 +182,7 @@ public partial class CustomNoteTypes
                 BounceTypeByNoteIndex[note.indexNote] = ResolveBounceType(note);
             var kind = GetNoteKind(note);
             if (kind != CustomNoteKind.None)
-                route = new PoolRoute { Kind = kind, Fields = GetMineFieldsForNoteType(note.type.getEnum()) };
+                route = new PoolRoute { Controller = __instance, Note = note, Kind = kind, Fields = GetMineFieldsForNoteType(note.type.getEnum()) };
         }
         __state = PoolRoutes.Enter(__instance, route);
     }

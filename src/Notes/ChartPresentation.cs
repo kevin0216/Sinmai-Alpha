@@ -115,6 +115,18 @@ public partial class CustomNoteTypes
     }
     private static readonly Dictionary<SpriteRenderer, SharedTiledCover> PresentationSharedCovers = new();
     private static readonly HashSet<SpriteRenderer> PresentationCoverCopies = new();
+    private static GameObject presentationMask;
+    private static GameObject PresentationMask
+    {
+        get
+        {
+            // A successful lookup is stable for this game. Unity's destroyed
+            // object check also handles native mask replacement.
+            if (presentationMask == null || !presentationMask.activeInHierarchy || presentationMask.name != "Mask")
+                presentationMask = GameObject.Find("Mask");
+            return presentationMask;
+        }
+    }
 
     private static void ApplySharedOuterCover(GameObject owner, int monitor, float? alpha, PresentationCommands.Track brightness = null)
     {
@@ -404,7 +416,7 @@ public partial class CustomNoteTypes
         MotionCovers.Clear();
         if (value != null || value2 != null || value3 != null)
         {
-            ApplySharedOuterCover(GameObject.Find("Mask"), owner.MonitorIndex, null);
+            ApplySharedOuterCover(PresentationMask, owner.MonitorIndex, null);
             foreach (SharedTiledCover value6 in PresentationSharedCovers.Values)
             {
                 if (owner.MonitorIndex >= 0 && owner.MonitorIndex < value6.Sides.Length && value6.Sides[owner.MonitorIndex] != null)
@@ -425,6 +437,8 @@ public partial class CustomNoteTypes
     }
     public static void ReleaseChartPresentation()
     {
+        presentationMask = null;
+        ChartFrameMotion.ClearNativeBackgroundOwners();
         ReleaseWatermarks();
         ResetTouchProgress();
         ResetNoisePresentation();
@@ -485,10 +499,11 @@ public partial class CustomNoteTypes
             var reader = NotesManager.Instance(___monitorIndex).getReader();
             if (!PresentationTimelines.TryGetValue(reader, out var timeline) ||
                 !timeline.Tracks.TryGetValue("innerbrightness", out var inner)) return;
-            // UpdateMovie has just computed this frame's native option opacity
-            // and opening fade. Compose once here, never from our previous result.
+            // Explicit chart values are absolute black-cover opacity (Majdata):
+            // 0 fully bright, 1 fully dark. Default/no command follows the native
+            // option and opening fade computed by UpdateMovie this frame.
             var color = ____movieMaskSprite.color;
-            color.a = PresentationViewportMath.MovieCoverAlpha(color.a, inner.EvaluatePlayerBrightness(NotesManager.GetCurrentMsec(), 0));
+            color.a = PresentationViewportMath.CoverAlpha(inner.EvaluatePlayerBrightness(NotesManager.GetCurrentMsec(), color.a));
             ____movieMaskSprite.color = color;
         }
     }

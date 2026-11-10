@@ -111,19 +111,15 @@ public static partial class ExtraDifficulty
                 }
                 return value;
             }
-            string text2 = System.IO.Path.ChangeExtension(text, ".ExtraDifficulty.flag");
-            if (!File.Exists(text2) && difficulty == 3)
-            {
-                text2 = System.IO.Path.Combine(directoryName, "ExtraDifficulty.flag");
-            }
             value = null;
-            if (File.Exists(text2))
+            ChartFlags flags = ChartMetadata.Read(text, difficulty, message => MelonLogger.Warning("[ExtraDifficulty] " + message));
+            if (flags != null)
             {
-                string theme = ChartFlags.Parse(File.ReadAllText(text2)).Theme;
+                string theme = flags.Theme;
                 value = DifficultyThemeCatalog.Resolve(Themes, theme);
                 if (value == null && !theme.Equals("None", StringComparison.OrdinalIgnoreCase))
                 {
-                    MelonLogger.Warning("[ExtraDifficulty] Unknown theme in " + text2 + ": " + theme + "; native appearance retained");
+                    MelonLogger.Warning("[ExtraDifficulty] Unknown theme for " + text + ": " + theme + "; native appearance retained");
                 }
             }
             Markers[key] = value;

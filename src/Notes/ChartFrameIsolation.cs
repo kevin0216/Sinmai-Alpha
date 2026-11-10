@@ -45,6 +45,9 @@ public sealed partial class ChartFrameMotion
     private static readonly int ClipMinX = Shader.PropertyToID("_ClipMinX");
     private static readonly int ClipMaxX = Shader.PropertyToID("_ClipMaxX");
     private static readonly HashSet<int> ReservedIsolationLayers = new();
+    // Resolve the native 1.70-only type once; GetComponent(string) performs a
+    // name lookup even on every renderer which has no clip component.
+    private static readonly Type ScreenClipType = AccessTools.TypeByName("ScreenClipSetter");
     private readonly List<int> isolationLayers = new();
     private readonly List<IsolationSurface> isolationSurfaces = new();
     private readonly Dictionary<GameObject, LayerLease> isolationLeases = new();
@@ -53,6 +56,9 @@ public sealed partial class ChartFrameMotion
     private readonly List<Renderer> isolationRenderers = new();
     private readonly List<Canvas> isolationCanvases = new();
     private readonly Stack<LayerLease> spareLayerLeases = new();
+    private readonly Stack<ScreenClipLease> spareScreenClipLeases = new();
+    private readonly Stack<IsolatedFrame> spareIsolatedFrames = new();
+    private readonly List<Renderer> screenClipComponents = new();
     private readonly MaterialPropertyBlock screenClipProperties = new();
     private readonly Vector3[] isolationCorners = new Vector3[4];
     private Camera isolationCamera, leasedSourceCamera;
@@ -105,6 +111,7 @@ public sealed partial class ChartFrameMotion
         AccessTools.FieldRef<CommonMonitor, MonitorBackgroundTownController> backgroundController = NativeRefs.BackgroundController;
         return (backgroundController != null) ? backgroundController(commonMonitor) : Traverse.Create(commonMonitor).Field("_backgroundController").GetValue<MonitorBackgroundTownController>();
     }
+    internal static void ClearNativeBackgroundOwners() => Array.Clear(BackgroundOwners, 0, BackgroundOwners.Length);
     private void DiscoverSurfaces()
     {
         if (!isolationSurfacesDirty) return;
@@ -142,7 +149,9 @@ public sealed partial class ChartFrameMotion
             if (restoreMax) screenClipProperties.SetFloat(ClipMaxX, lease.Max);
             if (restoreMin || restoreMax) lease.Owner.SetPropertyBlock(screenClipProperties);
         }
+        foreach (var lease in screenClipLeases) { lease.Owner = null; spareScreenClipLeases.Push(lease); }
         screenClipLeases.Clear();
+        screenClipRenderers.Clear();
     }
     private void LeaseLayer(GameObject owner, int layer, int cameraMask)
     {
@@ -334,12 +343,12 @@ public sealed partial class ChartFrameMotion
                     pooledIsolationTextures.Add(crop.Width);
                     pooledIsolationTextures.Add(crop.Height);
                     pooledIsolationTextures.Add(antiAliasing);
-                    isolatedFrames.Add(new IsolatedFrame
-                    {
-                        Bounds = bounds,
-                        Texture = temporary,
-                        TextureUv = crop.TextureUv
-                    });
+                    // GameProcess runs with the GC disabled: reuse frame records.
+                    IsolatedFrame isolated = (spareIsolatedFrames.Count == 0) ? new IsolatedFrame() : spareIsolatedFrames.Pop();
+                    isolated.Bounds = bounds;
+                    isolated.Texture = temporary;
+                    isolated.TextureUv = crop.TextureUv;
+                    isolatedFrames.Add(isolated);
                     isolationCamera.CopyFrom(component);
                     isolationCamera.enabled = false;
                     isolationCamera.transform.position = component.transform.position;
@@ -354,7 +363,7 @@ public sealed partial class ChartFrameMotion
                     try
                     {
                         LeaseScreenClips(crop.ProjectionViewport);
-                        isolationCamera.Render();
+                        RenderIsolationCamera();
                     }
                     finally
                     {
@@ -374,6 +383,8 @@ public sealed partial class ChartFrameMotion
             RenderTexture.active = active;
         }
     }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private void RenderIsolationCamera() => isolationCamera.Render();
     private bool FailIsolation(string reason)
     {
         RestoreIsolation(true);
@@ -392,7 +403,11 @@ public sealed partial class ChartFrameMotion
         }
         isolationLeases.Clear();
         if (!releaseTextures) return;
-        foreach (var frame in isolatedFrames) if (frame.Texture != null) RenderTexture.ReleaseTemporary(frame.Texture);
+        foreach (var frame in isolatedFrames)
+        {
+            if (frame.Texture != null) RenderTexture.ReleaseTemporary(frame.Texture);
+            frame.Texture = null; spareIsolatedFrames.Push(frame);
+        }
         isolatedFrames.Clear();
     }
     private void ReleaseIsolation()

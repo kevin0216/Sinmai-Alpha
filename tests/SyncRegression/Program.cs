@@ -278,9 +278,9 @@ internal static class Program
     {
         Equal(Vector2.Zero, SssJudgePathGeometry.Center(16), "C1 center");
         Equal(Vector2.Zero, SssJudgePathGeometry.Center(17), "C2 center");
-        // Native first-region centers: A/B at 67.5 degrees, D/E at 90 degrees.
-        Check(Vector2.Distance(SssJudgePathGeometry.Center(0), new Vector2(168.3807f, 406.5070f)) < .001f, "A1 center");
-        Check(Vector2.Distance(SssJudgePathGeometry.Center(18), new Vector2(0, 430.5f)) < .001f, "D1 center");
+        // Noise-region display centers: A/B at 67.5 degrees, D/E at 90 degrees.
+        Check(Vector2.Distance(SssJudgePathGeometry.Center(0), new Vector2(153.0734f, 369.5518f)) < .001f, "A1 center");
+        Check(Vector2.Distance(SssJudgePathGeometry.Center(18), new Vector2(0, 410f)) < .001f, "D1 center");
         for (var area = 0; area < 34; area++)
             for (var button = 0; button < 8; button++)
             {

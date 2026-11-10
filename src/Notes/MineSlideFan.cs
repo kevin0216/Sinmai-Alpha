@@ -44,6 +44,7 @@ public class MineSlideFan : SlideFan
     protected override void UpdateAlpha()
     {
         base.UpdateAlpha();
+        // slide_fun_mine_00-10 是白色贴图，染灰（地雷风格），保留 base 算好的 alpha 淡入淡出。
         SpriteRenderer[] value = ((SpriteLines != null) ? SpriteLines(this) : Traverse.Create(this).Field("_spriteLines").GetValue<SpriteRenderer[]>());
         if (value == null)
         {

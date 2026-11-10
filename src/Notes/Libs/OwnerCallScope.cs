@@ -17,6 +17,9 @@ internal sealed class OwnerCallScope<T> where T : class
     private readonly ThreadLocal<Lease> current = new();
     private volatile int generation;
 
+    // Innermost call's value on this thread (null for a stock or reset call).
+    internal T Current => current.Value is Lease lease && lease.Generation == generation ? lease.Value : null;
+
     internal T For(object owner)
     {
         for (var entry = current.Value; entry != null && entry.Generation == generation; entry = entry.Previous)

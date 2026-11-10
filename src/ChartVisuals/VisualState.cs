@@ -1,8 +1,9 @@
-using System.Runtime.CompilerServices;
 #nullable disable
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using System.Runtime.CompilerServices;
 
 // Shared by conversion and the game adapter. No Unity or preview-player dependency.
 namespace SinmaiAlpha.ChartVisuals
@@ -38,18 +39,28 @@ namespace SinmaiAlpha.ChartVisuals
         public bool IgnoreSV; // Authored c: keep HS, but use elapsed time instead of SV scroll.
         public int SlideAppearance; // 0=native/legacy SC, 1=SlideDrop, 2=TouchSlideDrop
         public string ReferenceSlide; // Geometry/moving-star presentation only; never a playable judge route.
+        public double? ExactHeadMsec, ExactTailMsec;
         public VisualValue Base = new VisualValue(), Guide = new VisualValue();
         public string Encode() => "VS|" + Family + "|" + ((Each ? 1 : 0) | (Break ? 2 : 0) | (Mine ? 4 : 0) |
             (ReferenceMotion ? 8 : 0) | (SlideAppearance << 4) | (IgnoreSV ? 64 : 0)) + "|" + Base.Encode() + "|" + Guide.Encode() +
-            (string.IsNullOrEmpty(ReferenceSlide) ? "" : "|" + ReferenceSlide);
+            (ExactHeadMsec.HasValue ? "|" + (ReferenceSlide ?? "") + "|" + ExactHeadMsec.Value.ToString("R", CultureInfo.InvariantCulture) +
+                "|" + (ExactTailMsec ?? ExactHeadMsec.Value).ToString("R", CultureInfo.InvariantCulture) :
+                string.IsNullOrEmpty(ReferenceSlide) ? "" : "|" + ReferenceSlide);
         public static VisualNote Decode(string text)
         {
             var p = text.Split('|');
-            if ((p.Length != 9 && p.Length != 10) || p[0] != "VS") throw new FormatException("Invalid visual note metadata");
+            if ((p.Length != 9 && p.Length != 10 && p.Length != 12) || p[0] != "VS") throw new FormatException("Invalid visual note metadata");
             var flags = int.Parse(p[2], CultureInfo.InvariantCulture);
+            if (p.Length == 12)
+                for (var i = 10; i < 12; i++)
+                    if (!double.TryParse(p[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var time) ||
+                        double.IsNaN(time) || double.IsInfinity(time))
+                        throw new FormatException("Invalid precise note time");
             return new VisualNote { Family = p[1], Each = (flags & 1) != 0, Break = (flags & 2) != 0, Mine = (flags & 4) != 0,
                 ReferenceMotion = (flags & 8) != 0, SlideAppearance = (flags >> 4) & 3, IgnoreSV = (flags & 64) != 0,
-                Base = VisualValue.Decode(p, 3), Guide = VisualValue.Decode(p, 6), ReferenceSlide = p.Length == 10 ? p[9] : null };
+                Base = VisualValue.Decode(p, 3), Guide = VisualValue.Decode(p, 6), ReferenceSlide = p.Length >= 10 ? p[9] : null,
+                ExactHeadMsec = p.Length == 12 ? (double?)double.Parse(p[10], CultureInfo.InvariantCulture) : null,
+                ExactTailMsec = p.Length == 12 ? (double?)double.Parse(p[11], CultureInfo.InvariantCulture) : null };
         }
     }
 
@@ -126,12 +137,16 @@ namespace SinmaiAlpha.ChartVisuals
             return true;
         }
 
+        // Called per visual-leased note per frame (AfterVisualFrame / UpdateBorrowedNotes) while the GC is
+        // disabled, so it allocates only the result: the type priority order used to be an iterator over a
+        // closure (5 allocations per call); First walks the same candidates in the same order, eagerly.
         public static VisualValue Resolve(IList<VisualChange> changes, double time, VisualNote note, string family = null)
         {
             return Resolve(changes, time, note, family, new VisualValue());
         }
 
-
+        // Same, filling a caller-owned value instead of a new one: every field is overwritten exactly as a fresh
+        // VisualValue would be filled, so a per-frame scratch (never one of the changes' own values) can be reused.
         public static VisualValue Resolve(IList<VisualChange> changes, double time, VisualNote note, string family, VisualValue into)
         {
             family = family ?? note.Family;
@@ -159,6 +174,9 @@ namespace SinmaiAlpha.ChartVisuals
             return into;
         }
 
+        // First value of this kind that is set, trying the types in priority order:
+        // mine (and nothing else for a mine's colour), break, each, the family, tap for a star's colour,
+        // then the untyped "" (except for a slide's size).
         private static VisualValue First(IList<VisualChange> changes, StreamIndex index, double time, VisualNote note, string family, string kind)
         {
             KindIndex kinds = null;
@@ -166,6 +184,7 @@ namespace SinmaiAlpha.ChartVisuals
             {
                 index.Kinds.TryGetValue(kind, out kinds);
             }
+            // Noise zones never inherit untyped or note-family values.
             if (family == "blockarea") return Lookup(changes, index, kinds, time, kind, "blockarea");
             VisualValue visualValue;
             if (note.Mine)
@@ -228,15 +247,21 @@ namespace SinmaiAlpha.ChartVisuals
             }
             switch (kind)
             {
-                case "color":
-                    return value.Color.HasValue;
-                case "size":
-                    return value.X.HasValue;
-                default:
-                    return value.Alpha.HasValue;
+            case "color":
+                return value.Color.HasValue;
+            case "size":
+                return value.X.HasValue;
+            default:
+                return value.Alpha.HasValue;
             }
         }
 
+        // The change Lookup returns is the one with the highest list index among those with Time <= time + 1e-6 and this
+        // exact Kind and Type (ordinal ==). The stream lists are built once per load, stably sorted by Time
+        // (BuildVisualCommands' OrderBy) and never changed afterwards, so each (Kind, Type) subsequence is ascending and
+        // its matches are a prefix of it: the backward scan's result is that prefix's last element, found here by binary
+        // search instead of a scan over the whole list per type tried. NaN times never match (NaN <= x is false; OrderBy
+        // puts them first) and are left out; a list with a null change or a non-ascending subsequence keeps the scan.
         private static VisualValue Lookup(IList<VisualChange> changes, StreamIndex index, KindIndex kinds, double time, string kind, string type)
         {
             if (index == null)
@@ -345,12 +370,13 @@ namespace SinmaiAlpha.ChartVisuals
             }
         }
 
+        // Indexes by list identity. Every caller passes a VisualTimeline stream list, so this holds one entry per stream
+        // of the loaded charts; ReleaseIndexes drops them at chart load and release (the cap bounds it regardless). The
+        // one-entry front cache serves the usual case of a frame's leases all reading the same stream.
         private static readonly Dictionary<IList<VisualChange>, StreamIndex> Indexes = new Dictionary<IList<VisualChange>, StreamIndex>(ReferenceComparer.Instance);
 
         private static StreamIndex LastIndex;
 
-        // Timeline entries are immutable during playback. A chart editor replacing
-        // entries without changing Count must invalidate these indexes after editing.
         public static void ReleaseIndexes()
         {
             Indexes.Clear();
