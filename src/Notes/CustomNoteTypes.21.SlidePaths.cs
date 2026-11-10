@@ -90,7 +90,7 @@ public partial class CustomNoteTypes
             var injected = 0;
             void Redirect(CodeInstruction original, MethodInfo method)
             {
-                var note = new CodeInstruction(OpCodes.Ldarg_1);
+                var note = FindSlideNoteLoad(newInstList);
                 note.labels.AddRange(original.labels);
                 var call = new CodeInstruction(OpCodes.Call, method);
                 call.blocks.AddRange(original.blocks);
@@ -102,19 +102,14 @@ public partial class CustomNoteTypes
             {
                 if (IsSlideManagerCall(inst, "GetSlidePath"))
                 {
-                    // 原始 callvirt 调用栈：instance, slideType, start, end, starButton（5 值）。
-                    // redirect 是静态方法且比原实例方法多一个 NoteData 参数（6 参数）：
-                    // 必须在 call 前补 ldarg.1（三个目标 Initialize 的签名均为 (NoteData)，
-                    // arg_1 就是 noteData），否则栈下溢 → Mono 验证器报
-                    // InvalidProgramException "call 0x00000095"（wrapper 编译崩溃，
-                    // 并连锁 SlideLayerReverse 等同一目标方法的 patch 失败）。
-                    // 不能保留原 callvirt：redirect 消费全部参数栈后残留的 callvirt 同样下溢。
-                    // 内置 slide 在 redirect 内部走回退分支（instance.GetXxx(...)），无行为变化。
+                    // Append the NoteData used by this lookup. Star heads and connected
+                    // slides read a child local, while root/fan lookups read arg_1.
+                    // Always passing arg_1 loses custom geometry on those child lookups.
                     Redirect(inst, methodGetSlidePathRedirect);
                 }
                 else if (IsSlideManagerCall(inst, "GetSlideHitArea"))
                 {
-                    // GetSlideHitArea(SlideType, int, int) 栈 4 值 + noteData = 5 = redirect 参数数
+                    // instance + four arguments + the source NoteData
                     Redirect(inst, methodGetSlideHitAreaRedirect);
                 }
                 else if (IsSlideManagerCall(inst, "GetSlideLength"))
@@ -145,17 +140,37 @@ public partial class CustomNoteTypes
         private static bool IsSlideManagerCall(CodeInstruction inst, string methodName)
         {
             if (inst.opcode != OpCodes.Call && inst.opcode != OpCodes.Callvirt) return false;
-            // 反射模式 operand=MethodInfo；Cecil 模式 operand=Mono.Cecil.MethodReference。
-            if (inst.operand is MethodInfo mi)
+            return IsMember(inst.operand, "SlideManager", methodName);
+        }
+
+        private static CodeInstruction FindSlideNoteLoad(List<CodeInstruction> instructions)
+        {
+            // Every lookup reads its start argument from NoteData.startButtonPos,
+            // including fans whose slide type and end position are computed separately.
+            for (var i = instructions.Count - 1; i > 0; i--)
             {
-                return mi.Name == methodName && mi.DeclaringType != null && mi.DeclaringType.Name == "SlideManager";
+                var field = instructions[i];
+                if (field.opcode != OpCodes.Ldfld ||
+                    !IsMember(field.operand, nameof(NoteData), nameof(NoteData.startButtonPos))) continue;
+                var source = instructions[i - 1];
+                if (!source.IsLdarg() && !source.IsLdloc()) break;
+                // Replay only the load, without duplicating its labels or exception blocks.
+                return new CodeInstruction(source.opcode, source.operand);
             }
-            if (inst.operand != null)
+            throw new InvalidOperationException("[CustomNoteType] Cannot identify the NoteData for a SlideManager lookup");
+        }
+
+        private static bool IsMember(object operand, string declaringType, string memberName)
+        {
+            // Harmony supplies reflection members or Cecil references, depending on runtime.
+            if (operand is MemberInfo member)
+                return member.Name == memberName && member.DeclaringType?.Name == declaringType;
+            if (operand != null)
             {
-                var name = inst.operand.GetType().GetProperty("Name")?.GetValue(inst.operand) as string;
-                if (name != methodName) return false;
-                var decl = inst.operand.GetType().GetProperty("DeclaringType")?.GetValue(inst.operand);
-                return decl?.GetType().GetProperty("Name")?.GetValue(decl) as string == "SlideManager";
+                var name = operand.GetType().GetProperty("Name")?.GetValue(operand) as string;
+                if (name != memberName) return false;
+                var decl = operand.GetType().GetProperty("DeclaringType")?.GetValue(operand);
+                return decl?.GetType().GetProperty("Name")?.GetValue(decl) as string == declaringType;
             }
             return false;
         }

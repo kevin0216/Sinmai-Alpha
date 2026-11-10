@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SlideRedirectTests</AssemblyName>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Sinmai-Alpha"><HintPath>../../bin/Release/net472/Sinmai-Alpha.dll</HintPath></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>../../Libs/Assembly-CSharp.dll</HintPath></Reference>
+    <Reference Include="Assembly-CSharp-firstpass"><HintPath>../../Libs/Assembly-CSharp-firstpass.dll</HintPath></Reference>
+    <Reference Include="0Harmony"><HintPath>../../Libs/0Harmony.dll</HintPath></Reference>
+    <Reference Include="Mono.Cecil"><HintPath>../../Libs/Mono.Cecil.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>../../Libs/UnityEngine.CoreModule.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

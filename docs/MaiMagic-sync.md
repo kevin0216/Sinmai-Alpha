@@ -11,6 +11,7 @@ The changes were merged into the current source by member. Current chart behavio
 - Optional volume synchronization accepts the old `float[]` stores and leaves incompatible stores, including newer dictionaries, alone. Missing members are cached until another host assembly loads.
 - Mine audio removes a pending batch before playback and contains playback failures, so a throwing player cannot replay stale queued hits.
 - Existing public interop names (`IsMineNoteOwner`, `ReadMode`, `ModeChart`) and the identity hooks used when ExtraDifficulty is disabled remain available.
+- Alpha also guards MaiMagic's `CustomScoreKindIcon` writes, including older hosts without Alpha interop. A chart with a valid `SINMAI_ALPHA_MODE` header owns its InfoIcon per difficulty and STD/DX side. Overrides and result sprite-list replacements are suppressed for that chart, including when its PNG is missing; ordinary charts retain MaiMagic's icons. Saved overrides follow reused cards and animation changes without repeated writes on steady frames.
 
 ## Which older performance fixes still apply?
 
@@ -54,6 +55,7 @@ The source checkout also referenced two absent helpers, `OwnerCallScope` and `Ss
 | Claude field-access/SV differential harness | 775,559 checks, zero mismatches. |
 | Claude mine-audio flush harness | 6/6 passed for each game-version fixture. |
 | Claude volume-sync harness | All seven host/storage scenarios passed, including absent, legacy, incompatible and throwing hosts. |
+| Score-kind icon integration harness | 132 checks passed: 33 each against the installed and newer cooperative MaiMagic builds, with preloaded and late-loaded host assemblies. Covered main/mini cards, animated STD/DX changes, difficulty changes, missing PNGs, track start, results, music information and photo summaries. Uses real Alpha/host patches with simulated Unity objects; native rendering was not tested. |
 
 The new pure regression suite measured zero allocated bytes for 20,000 warmed speed/visual lookup pairs. A desktop .NET CPU sample of 2,000 speed lookups over 200 controls took about 35 ms with the scan oracle and 0.12 ms with the compiled track. This is an isolated lookup measurement, not a game FPS estimate. Claude's historical performance measurements were not used as results for this build.
 

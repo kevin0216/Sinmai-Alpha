@@ -34,6 +34,7 @@ namespace SinmaiAlpha
             {
                 foreach (var root in roots) Apply(root, ref count);
                 Compatibility.LegacyPatchGuard.MarkApplied(settings.ChartFeatures, settings.ExtraDifficulty);
+                Compatibility.CustomScoreKindCompatibility.Initialize(HarmonyInstance);
                 MelonLogger.Msg(Notes.ChartWatermark.Credit);
                 MelonLogger.Msg("[Sinmai-Alpha] Ready: " + count + " patch groups; assets=" + Hosting.AssetFiles.Root);
             }

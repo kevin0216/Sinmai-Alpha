@@ -22,6 +22,9 @@ public static class ExtraMode
     {
         public Sprite Original, Applied;
 
+        public Sprite HostOverride;
+        public bool ModeOwned, OverrideSuppressed;
+
         public Image Owner;
     }
     private static readonly Dictionary<string, Stamp> Charts = new(StringComparer.OrdinalIgnoreCase);
@@ -211,6 +214,7 @@ public static class ExtraMode
             {
                 value.Applied = null;
                 value.Original = null;
+                UpdateHostOverride(image, value, false);
             }
             return;
         }
@@ -222,6 +226,7 @@ public static class ExtraMode
         }
         value.Original = sprite;
         value.Applied = sprite2;
+        UpdateHostOverride(image, value, text2 != null);
         Sprite sprite3 = sprite2 ?? sprite;
         if (image.sprite == sprite3)
         {
@@ -236,6 +241,33 @@ public static class ExtraMode
         {
             applying = false;
         }
+    }
+
+    internal static bool OwnsScoreKindIcon(Image image)
+    {
+        if (image == null) return false;
+        Apply(image);
+        return Images.TryGetValue(image.GetInstanceID(), out var lease) && lease.ModeOwned;
+    }
+
+    internal static void SetHostScoreKindOverride(Image image, Sprite replacement)
+    {
+        if (image == null) return;
+        var lease = NewLease(image, image.GetInstanceID());
+        lease.HostOverride = replacement;
+        Apply(image);
+        image.overrideSprite = lease.ModeOwned ? null : replacement;
+        lease.OverrideSuppressed = lease.ModeOwned;
+    }
+
+    private static void UpdateHostOverride(Image image, Lease lease, bool modeOwned)
+    {
+        lease.ModeOwned = modeOwned;
+        if (lease.HostOverride == null || lease.OverrideSuppressed == modeOwned) return;
+        // A card can change difficulty or animate between STD/DX without another
+        // host write. Re-evaluate its saved override with the same chart as Apply.
+        image.overrideSprite = modeOwned ? null : lease.HostOverride;
+        lease.OverrideSuppressed = modeOwned;
     }
 
     private static void Refresh(Component owner)
