@@ -110,6 +110,7 @@ public static partial class ExtraDifficulty
         [HarmonyPostfix] public static void Postfix(MusicSelectProcess __instance, int __0, object[] __args, ref int __result,
             MusicSelectProcess.SubSequence[] ____currentPlayerSubSequence)
         {
+            if (sortingSongs != 0) return;
             // OnStart sorts songs before allocating player sequences. Preserve
             // the native result until both sequence and catalogue are ready.
             if (____currentPlayerSubSequence == null || (uint)__0 >= (uint)____currentPlayerSubSequence.Length) return;
@@ -123,6 +124,17 @@ public static partial class ExtraDifficulty
             int resolved = mask < 0 ? -1 : DifficultyAvailability.Resolve(mask, __result);
             if (resolved >= 0) __result = resolved;
         }
+    }
+
+    // Native sorts read GetCurrentDifficulty inside their comparers while OnSortChange clears
+    // and rebuilds the song list, so the cursor row is meaningless there (GetMusic can index a
+    // half-built row). Sorting keeps the player's own difficulty, as in the native game.
+    [ThreadStatic] private static int sortingSongs;
+    [HarmonyPatch(typeof(MusicSelectProcess), "SetSortList")]
+    public static class AvailableSortPatch
+    {
+        [HarmonyPrefix] public static void Prefix() => sortingSongs++;
+        [HarmonyFinalizer] public static void Finalizer() => sortingSongs--;
     }
 
     [HarmonyPatch(typeof(MusicSelectChainList), "SetChainData")]

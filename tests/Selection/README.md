@@ -33,6 +33,11 @@ catalogues, both players, genre-to-song drawing and adjacent-card resolution.
 The native result is preserved until selection state is ready; normal chart
 resolution resumes afterwards.
 
+Sort regression calls the original `SetSortList` while the cursor row is half
+built (the in-game `OnSortChange` crash). Native sort comparers keep the player's
+own difficulty for both players and score kinds, and the guard is released when
+the native sort throws.
+
 Native rendering/audio endpoints are stubbed in the workflow tests. Original-game
 button animation, card layout and visual behavior still require in-game validation;
 offline tests are not a substitute for that acceptance pass.
