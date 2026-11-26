@@ -117,7 +117,8 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
         public bool Evaluate()
         {
             if (Owner == null || Main == null || Bounds == null || Controller == null ||
-                !Main.gameObject.activeInHierarchy || GuiSizes.SinglePlayer && Owner.MonitorIndex != 0) return Active = false;
+                !Main.gameObject.activeInHierarchy || GuiSizes.SinglePlayer && Owner.MonitorIndex != 0 ||
+                CustomNoteTypes.ChartEffectsHidden(Owner)) return Active = false;
             var now = NotesManager.GetCurrentMsec();
             Degrees = Rotate?.Evaluate(now) ?? 0;
             PVDegrees = Rotate?.EvaluatePVRotation(now) ?? 0;
@@ -325,7 +326,8 @@ public sealed partial class ChartFrameMotion : MonoBehaviour
             // Snapshot after MOVE/ROTATE/ZOOM, before OnPostRender restores
             // native poses. The later noise pass uses this exact field matrix.
             foreach (var frame in frames.Values)
-                if (frame.Main != null && frame.Main.gameObject.activeInHierarchy && (!GuiSizes.SinglePlayer || frame.Owner.MonitorIndex == 0))
+                if (frame.Main != null && frame.Main.gameObject.activeInHierarchy && (!GuiSizes.SinglePlayer || frame.Owner.MonitorIndex == 0) &&
+                    !CustomNoteTypes.ChartEffectsHidden(frame.Owner))
                     frame.Noise?.CaptureField(renderCamera);
             if (!PrepareIsolation())
                 foreach (var frame in frames.Values) { frame.RestoreWorld(); frame.RestoreCanvas(); }

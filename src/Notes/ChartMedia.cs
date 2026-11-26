@@ -140,7 +140,9 @@ public partial class CustomNoteTypes
         {
             return;
         }
-        bool flag = NotesManager.Instance(value.MonitorIndex).IsPlaying();
+        // A hidden attract-demo field stops audio, video and overlays like a stopped
+        // player; SetPlaybackActive(true) resumes at the current time when shown.
+        bool flag = NotesManager.Instance(value.MonitorIndex).IsPlaying() && !ChartEffectsHidden(monitor);
         float num = NotesManager.GetCurrentMsec() / 1000f;
         if (!flag)
         {

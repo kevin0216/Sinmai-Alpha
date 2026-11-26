@@ -831,7 +831,7 @@ public sealed class ReferenceSubtitleDisplay : MonoBehaviour
 
     private void ShowLabels()
     {
-        if (owner == null || main == null || root == null || !main.gameObject.activeInHierarchy || main.alpha <= 0f || timeline == null || (GuiSizes.SinglePlayer && owner.MonitorIndex != 0))
+        if (owner == null || main == null || root == null || !main.gameObject.activeInHierarchy || main.alpha <= 0f || timeline == null || (GuiSizes.SinglePlayer && owner.MonitorIndex != 0) || CustomNoteTypes.ChartEffectsHidden(owner))
         {
             return;
         }

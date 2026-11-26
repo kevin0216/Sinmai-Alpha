@@ -112,7 +112,7 @@ public partial class CustomNoteTypes
             }
             value3.Apply(NotesManager.GetCurrentMsec());
         }
-        private static void Release(GameMonitor monitor)
+        internal static void Release(GameMonitor monitor)
         {
             if (!Leases.TryGetValue(monitor, out var lease)) return;
             lease.Dispose(); Leases.Remove(monitor);

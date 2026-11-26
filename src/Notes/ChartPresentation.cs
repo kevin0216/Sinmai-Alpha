@@ -250,6 +250,11 @@ public partial class CustomNoteTypes
     }
     public static void ApplyChartPresentation(GameMonitor __instance)
     {
+        if (ChartEffectsHidden(__instance))
+        {
+            SuspendChartPresentation(__instance);
+            return;
+        }
         ApplyWatermark(__instance);
         ApplyJudgeLinePresentation(__instance);
         JudgeLineExpansionRuntime.Apply(__instance);
@@ -483,6 +488,7 @@ public partial class CustomNoteTypes
         if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
  foreach (var motion in PresentationMotionCameras.Values) if (motion != null) motion.BeforeNativeUpdate(__instance); }
         [HarmonyPostfix] public static void Postfix(GameMonitor __instance) {
+        TrackAdvDemoMonitor(__instance);
         if (!(CustomNoteTypes.FeaturesEnabled(__instance))) {  return; }
         ApplyChartPresentation(__instance);
     }
@@ -495,7 +501,7 @@ public partial class CustomNoteTypes
         {
         if (!(CustomNoteTypes.FeaturesForMonitor(___monitorIndex))) {  return; }
 
-            if (____movieMaskSprite == null || GuiSizes.SinglePlayer && ___monitorIndex != 0) return;
+            if (____movieMaskSprite == null || GuiSizes.SinglePlayer && ___monitorIndex != 0 || ChartEffectsHidden(___monitorIndex)) return;
             var reader = NotesManager.Instance(___monitorIndex).getReader();
             if (!PresentationTimelines.TryGetValue(reader, out var timeline) ||
                 !timeline.Tracks.TryGetValue("innerbrightness", out var inner)) return;
@@ -677,7 +683,7 @@ public sealed class ChartShakeCamera : MonoBehaviour
             foreach (KeyValuePair<GameMonitor, Frame> frame2 in frames)
             {
                 Frame value = frame2.Value;
-                if (frame2.Key == null || value.Bounds == null || !value.Bounds.gameObject.activeInHierarchy)
+                if (frame2.Key == null || value.Bounds == null || !value.Bounds.gameObject.activeInHierarchy || CustomNoteTypes.ChartEffectsHidden(frame2.Key))
                 {
                     continue;
                 }
@@ -773,7 +779,7 @@ public sealed class ChartShakeCamera : MonoBehaviour
                 foreach (KeyValuePair<GameMonitor, Frame> frame3 in frames)
                 {
                     Frame value2 = frame3.Value;
-                    if (frame3.Key == null || value2.Noise == null || value2.Playfield == null || value2.Bounds == null || !value2.Bounds.gameObject.activeInHierarchy)
+                    if (frame3.Key == null || value2.Noise == null || value2.Playfield == null || value2.Bounds == null || !value2.Bounds.gameObject.activeInHierarchy || CustomNoteTypes.ChartEffectsHidden(frame3.Key))
                     {
                         continue;
                     }
@@ -896,7 +902,7 @@ public sealed class ChartShakeCamera : MonoBehaviour
         foreach (KeyValuePair<GameMonitor, Frame> frame in frames)
         {
             Frame value = frame.Value;
-            if (frame.Key == null || value.Bounds == null || !value.Bounds.gameObject.activeInHierarchy)
+            if (frame.Key == null || value.Bounds == null || !value.Bounds.gameObject.activeInHierarchy || CustomNoteTypes.ChartEffectsHidden(frame.Key))
             {
                 continue;
             }
